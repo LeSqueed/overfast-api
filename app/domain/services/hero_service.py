@@ -329,7 +329,7 @@ class HeroService(StaticDataService):
         region: str | None = None,
         map_key: str | None = None,
         tier: str | None = None,
-        hero: str | None = None,
+        heroes: list[str] | None = None,
         since: int | None = None,
         until: int | None = None,
     ) -> list[dict]:
@@ -341,7 +341,7 @@ class HeroService(StaticDataService):
             region: Optional region value (e.g. "europe").
             map_key: Optional map key (e.g. "busan").
             tier: Optional competitive division (e.g. "gold") or "all".
-            hero: Optional hero key (e.g. "ana").
+            heroes: Optional list of hero keys (e.g. ["ana", "genji"]).
             since: Optional lower bound (Unix ts).
             until: Optional upper bound (Unix ts).
 
@@ -355,7 +355,7 @@ class HeroService(StaticDataService):
             region=region,
             map_=map_key,
             tier=tier,
-            hero=hero,
+            heroes=heroes,
             since=since,
             until=until,
         )

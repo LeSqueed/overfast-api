@@ -115,7 +115,7 @@ class FakeStorage:
         region: str | None = None,
         map_: str | None = None,
         tier: str | None = None,
-        hero: str | None = None,
+        heroes: list[str] | None = None,
         since: int | None = None,
         until: int | None = None,
     ) -> list[dict]:
@@ -127,7 +127,7 @@ class FakeStorage:
             and (region is None or row["region"] == region)
             and (map_ is None or row["map"] == map_)
             and (tier is None or row["tier"] == tier)
-            and (hero is None or row["hero"] == hero)
+            and (heroes is None or row["hero"] in heroes)
             and (since is None or row["captured_at"] >= since)
             and (until is None or row["captured_at"] <= until)
         ]

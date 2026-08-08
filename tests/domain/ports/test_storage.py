@@ -207,7 +207,7 @@ class TestHeroStatsSnapshots:
             region="europe",
             map_="busan",
             tier="gold",
-            hero="ana",
+            heroes=["ana"],
         )
 
         assert len(result) == 1
@@ -240,11 +240,43 @@ class TestHeroStatsSnapshots:
             region="europe",
             map_="busan",
             tier="all",
-            hero="ana",
+            heroes=["ana"],
         )
 
         assert [r["captured_at"] for r in result] == [1700000001, 1700000002]
         assert [r["pickrate"] for r in result] == [6.0, 7.0]
+
+    @pytest.mark.asyncio
+    async def test_history_filters_multiple_heroes(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(
+            1700000001,
+            [
+                {**base},
+                {**base, "hero": "genji"},
+                {**base, "hero": "mercy"},
+            ],
+        )
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            map_="busan",
+            tier="all",
+            heroes=["ana", "genji"],
+        )
+
+        assert {r["hero"] for r in result} == {"ana", "genji"}
 
     @pytest.mark.asyncio
     async def test_history_since_until_filters(self, storage_db):
@@ -274,7 +306,7 @@ class TestHeroStatsSnapshots:
             region="europe",
             map_="busan",
             tier="gold",
-            hero="ana",
+            heroes=["ana"],
             since=1700000002,
             until=1700000003,
         )
@@ -313,7 +345,7 @@ class TestHeroStatsSnapshots:
             gamemode="competitive",
             region="europe",
             tier="all",
-            hero="ana",
+            heroes=["ana"],
             since=1700000000,
             until=1700001000,
         )
@@ -347,7 +379,7 @@ class TestHeroStatsSnapshots:
             region="europe",
             map_="busan",
             tier="gold",
-            hero="ana",
+            heroes=["ana"],
         )
         assert len(remaining) == 1
         assert remaining[0]["captured_at"] == now - 10

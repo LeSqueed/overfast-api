@@ -352,7 +352,7 @@ def test_get_hero_stats_history_optional_filters(client: TestClient):
         region=None,
         map_key=None,
         tier=None,
-        hero=None,
+        heroes=None,
         since=1700000000,
         until=1700003600,
     )
@@ -371,7 +371,7 @@ def test_get_hero_stats_history_since_until(client: TestClient):
                 "region": "europe",
                 "map": "busan",
                 "tier": "gold",
-                "hero": "ana",
+                "heroes": ["ana"],
                 "since": 1700000000,
                 "until": 1700003600,
             },
@@ -385,7 +385,7 @@ def test_get_hero_stats_history_since_until(client: TestClient):
         region="europe",
         map_key="busan",
         tier="gold",
-        hero="ana",
+        heroes=["ana"],
         since=1700000000,
         until=1700003600,
     )

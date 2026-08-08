@@ -168,8 +168,10 @@ async def get_hero_stats(
     description=(
         "Get historical hero pickrate/winrate snapshots."
         "<br />`platform` and `gamemode` are required; `region`, `map`, "
-        "`tier` and `hero` are optional filters, and `since`/`until` bound "
+        "`tier` and `heroes` are optional filters, and `since`/`until` bound "
         "the snapshot timestamps."
+        "<br />`heroes` accepts one or more hero keys (repeated query "
+        "parameter), returning only matching heroes."
         "<br />Each point carries the full context (platform, gamemode, "
         "region, map, tier, hero, captured_at) so clients can group or "
         "filter the series themselves."
@@ -216,8 +218,13 @@ async def get_hero_stats_history(
             examples=["gold", "all"],
         ),
     ] = None,
-    hero: Annotated[
-        HeroKey | None, Query(title="Hero key filter", examples=["ana"])
+    heroes: Annotated[
+        list[HeroKey] | None,
+        Query(
+            title="Hero key filter",
+            description="One or more hero keys (repeated query parameter).",
+            examples=["ana"],
+        ),
     ] = None,
     since: Annotated[
         int | None,
@@ -234,7 +241,7 @@ async def get_hero_stats_history(
         region=str(region) if region else None,
         map_key=str(map_) if map_ else None,
         tier=tier,
-        hero=str(hero) if hero else None,
+        heroes=[str(hero) for hero in heroes] if heroes else None,
         since=since,
         until=until,
     )

@@ -388,7 +388,7 @@ class TestHeroServiceHistory:
             region="europe",
             map_key="busan",
             tier="gold",
-            hero="ana",
+            heroes=["ana"],
             since=1700000000,
             until=1700001000,
         )
@@ -400,7 +400,7 @@ class TestHeroServiceHistory:
             region="europe",
             map_="busan",
             tier="gold",
-            hero="ana",
+            heroes=["ana"],
             since=1700000000,
             until=1700001000,
         )

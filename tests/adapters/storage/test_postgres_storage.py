@@ -555,7 +555,7 @@ class TestGetHeroStatsHistory:
             region="europe",
             map_="busan",
             tier="gold",
-            hero="ana",
+            heroes=["ana"],
         )
 
         assert result[0]["captured_at"] == int(captured.timestamp())
@@ -576,7 +576,7 @@ class TestGetHeroStatsHistory:
             region="europe",
             map_="busan",
             tier="gold",
-            hero="ana",
+            heroes=["ana"],
             since=1700000000,
             until=1700001000,
         )
@@ -585,13 +585,14 @@ class TestGetHeroStatsHistory:
         args = list(conn.fetch.call_args[0][1:])
         assert "captured_at >= TO_TIMESTAMP($7)" in query
         assert "captured_at <= TO_TIMESTAMP($8)" in query
+        assert "hero = ANY($6::text[])" in query
         assert args == [
             "pc",
             "competitive",
             "europe",
             "busan",
             "gold",
-            "ana",
+            ["ana"],
             1700000000,
             1700001000,
         ]
@@ -618,6 +619,23 @@ class TestGetHeroStatsHistory:
         assert "captured_at >= TO_TIMESTAMP($3)" in query
         assert "captured_at <= TO_TIMESTAMP($4)" in query
         assert args == ["pc", "competitive", 1700000000, 1700001000]
+
+    @pytest.mark.asyncio
+    async def test_filters_by_multiple_heroes(self):
+        conn = _make_connection(fetch_result=[])
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        await storage.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            heroes=["ana", "genji", "reinhardt"],
+        )
+
+        query = conn.fetch.call_args[0][0]
+        args = list(conn.fetch.call_args[0][1:])
+        assert "hero = ANY($3::text[])" in query
+        assert args == ["pc", "competitive", ["ana", "genji", "reinhardt"]]
 
 
 class TestDeleteOldHeroStatsSnapshots:
