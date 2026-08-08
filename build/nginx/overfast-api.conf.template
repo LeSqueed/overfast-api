@@ -47,8 +47,11 @@ server {
   }
 
   # Overwatch rates dashboard (static SPA under /dashboard/)
-  location /dashboard {
-    root /static;
+  location = /dashboard {
+    return 301 /dashboard/;
+  }
+  location ^~ /dashboard/ {
+    alias /static/dashboard/;
     index index.html;
     try_files $uri $uri/ /dashboard/index.html;
 
