@@ -112,10 +112,10 @@ class FakeStorage:
         self,
         platform: str,
         gamemode: str,
-        region: str,
-        map_: str,
-        tier: str,
-        hero: str,
+        region: str | None = None,
+        map_: str | None = None,
+        tier: str | None = None,
+        hero: str | None = None,
         since: int | None = None,
         until: int | None = None,
     ) -> list[dict]:
@@ -124,10 +124,10 @@ class FakeStorage:
             for row in self._hero_stats_snapshots
             if row["platform"] == platform
             and row["gamemode"] == gamemode
-            and row["region"] == region
-            and row["map"] == map_
-            and row["tier"] == tier
-            and row["hero"] == hero
+            and (region is None or row["region"] == region)
+            and (map_ is None or row["map"] == map_)
+            and (tier is None or row["tier"] == tier)
+            and (hero is None or row["hero"] == hero)
             and (since is None or row["captured_at"] >= since)
             and (until is None or row["captured_at"] <= until)
         ]
@@ -135,6 +135,11 @@ class FakeStorage:
         return [
             {
                 "captured_at": row["captured_at"],
+                "platform": row["platform"],
+                "gamemode": row["gamemode"],
+                "region": row["region"],
+                "map": row["map"],
+                "tier": row["tier"],
                 "hero": row["hero"],
                 "pickrate": row["pickrate"],
                 "winrate": row["winrate"],

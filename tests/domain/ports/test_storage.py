@@ -282,6 +282,47 @@ class TestHeroStatsSnapshots:
         assert [r["captured_at"] for r in result] == [1700000002, 1700000003]
 
     @pytest.mark.asyncio
+    async def test_all_maps_month_query(self, storage_db):
+        busan = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        dorado = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "dorado",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 6.0,
+            "winrate": 51.0,
+        }
+        await storage_db.store_hero_stats_snapshots(1700000001, [{**busan}, {**dorado}])
+        await storage_db.store_hero_stats_snapshots(
+            1700000061, [{**busan, "pickrate": 5.5}, {**dorado, "pickrate": 6.5}]
+        )
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            tier="all",
+            hero="ana",
+            since=1700000000,
+            until=1700001000,
+        )
+
+        assert len(result) == 4  # noqa: PLR2004
+        assert {r["map"] for r in result} == {"busan", "dorado"}
+        assert all(r["platform"] == "pc" for r in result)
+
+    @pytest.mark.asyncio
     async def test_delete_old_snapshots(self, storage_db):
         now = int(time.time())
         base = {

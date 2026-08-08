@@ -301,9 +301,15 @@ class TestHeroServiceSnapshot:
 
         assert count > 0
         assert mock_parse.await_count > 0
-        cast("Any", svc.storage).store_hero_stats_snapshots.assert_awaited_once()
-        rows = cast("Any", svc.storage).store_hero_stats_snapshots.call_args[0][1]
-        assert all(row["hero"] == "ana" for row in rows)
+        cast("Any", svc.storage).store_hero_stats_snapshots.assert_awaited()
+        all_rows = [
+            row
+            for call in cast(
+                "Any", svc.storage
+            ).store_hero_stats_snapshots.await_args_list
+            for row in call.args[1]
+        ]
+        assert all(row["hero"] == "ana" for row in all_rows)
         valid_tiers = {
             "all",
             "bronze",
@@ -314,7 +320,7 @@ class TestHeroServiceSnapshot:
             "master",
             "grandmaster",
         }
-        assert all(row["tier"] in valid_tiers for row in rows)
+        assert all(row["tier"] in valid_tiers for row in all_rows)
 
     @pytest.mark.asyncio
     async def test_snapshot_skips_failed_combos(self):
@@ -334,10 +340,14 @@ class TestHeroServiceSnapshot:
             count = await svc.snapshot_hero_stats()
 
         assert count > 0
-        stored_rows = cast("Any", svc.storage).store_hero_stats_snapshots.call_args[0][
-            1
+        all_rows = [
+            row
+            for call in cast(
+                "Any", svc.storage
+            ).store_hero_stats_snapshots.await_args_list
+            for row in call.args[1]
         ]
-        stored_maps = {row["map"] for row in stored_rows}
+        stored_maps = {row["map"] for row in all_rows}
         assert "busan" not in stored_maps
         assert stored_maps != set()
 

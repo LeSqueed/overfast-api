@@ -278,12 +278,22 @@ def test_get_hero_stats_history_success(client: TestClient):
         return_value=[
             {
                 "captured_at": 1700000000,
+                "platform": "pc",
+                "gamemode": "competitive",
+                "region": "europe",
+                "map": "busan",
+                "tier": "all",
                 "hero": "ana",
                 "pickrate": 5.5,
                 "winrate": 52.3,
             },
             {
                 "captured_at": 1700003600,
+                "platform": "pc",
+                "gamemode": "competitive",
+                "region": "europe",
+                "map": "busan",
+                "tier": "all",
                 "hero": "ana",
                 "pickrate": 6.0,
                 "winrate": 53.1,
@@ -297,7 +307,7 @@ def test_get_hero_stats_history_success(client: TestClient):
                 "gamemode": "competitive",
                 "region": "europe",
                 "map": "busan",
-                "tier": "gold",
+                "tier": "all",
                 "hero": "ana",
             },
         )
@@ -305,8 +315,47 @@ def test_get_hero_stats_history_success(client: TestClient):
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert len(data) == 2  # noqa: PLR2004
-    assert set(data[0].keys()) == {"captured_at", "hero", "pickrate", "winrate"}
+    assert set(data[0].keys()) == {
+        "captured_at",
+        "platform",
+        "gamemode",
+        "region",
+        "map",
+        "tier",
+        "hero",
+        "pickrate",
+        "winrate",
+    }
     assert data[1]["winrate"] == 53.1  # noqa: PLR2004
+
+
+def test_get_hero_stats_history_optional_filters(client: TestClient):
+    with patch(
+        "app.domain.services.hero_service.HeroService.get_hero_stats_history",
+        return_value=[],
+    ) as mock_history:
+        response = client.get(
+            "/heroes/stats/history",
+            params={
+                "platform": "pc",
+                "gamemode": "competitive",
+                "since": 1700000000,
+                "until": 1700003600,
+            },
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == []
+    mock_history.assert_awaited_once_with(
+        platform="pc",
+        gamemode="competitive",
+        region=None,
+        map_key=None,
+        tier=None,
+        hero=None,
+        since=1700000000,
+        until=1700003600,
+    )
 
 
 def test_get_hero_stats_history_since_until(client: TestClient):

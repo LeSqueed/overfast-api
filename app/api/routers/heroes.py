@@ -166,9 +166,15 @@ async def get_hero_stats(
     tags=[RouteTag.HEROES],
     summary="Get hero stats history",
     description=(
-        "Get historical hero pickrate/winrate snapshots for a fixed "
-        "platform, gamemode, region, map, tier and hero combination."
-        "<br />Only combinations captured by the snapshot cron are available."
+        "Get historical hero pickrate/winrate snapshots."
+        "<br />`platform` and `gamemode` are required; `region`, `map`, "
+        "`tier` and `hero` are optional filters, and `since`/`until` bound "
+        "the snapshot timestamps."
+        "<br />Each point carries the full context (platform, gamemode, "
+        "region, map, tier, hero, captured_at) so clients can group or "
+        "filter the series themselves."
+        "<br />Note: each `captured_at` is the time *we* recorded the "
+        "reading; Blizzard does not expose the window it aggregates over."
     ),
     operation_id="get_hero_stats_history",
     response_model=list[HeroStatsHistoryPoint],
@@ -188,28 +194,31 @@ async def get_hero_stats_history(
         ),
     ],
     region: Annotated[
-        PlayerRegion,
+        PlayerRegion | None,
         Query(
             title="Region",
-            description="Filter on a specific player region.",
+            description="Optional filter on a specific player region.",
             examples=["europe"],
         ),
-    ],
+    ] = None,
     map_: Annotated[
-        MapKey, Query(alias="map", title="Map key filter", examples=["busan"])
-    ],
+        MapKey | None,
+        Query(alias="map", title="Map key filter", examples=["busan"]),
+    ] = None,
     tier: Annotated[
-        str,
+        str | None,
         Query(
             title="Competitive tier",
             description=(
-                "Competitive division, or 'all' for the combined snapshot. "
-                "Only tiers present in captured snapshots are returned."
+                "Optional competitive division, or 'all' for the combined "
+                "snapshot. Only tiers present in captured snapshots are returned."
             ),
             examples=["gold", "all"],
         ),
-    ],
-    hero: Annotated[HeroKey, Query(title="Hero key filter", examples=["ana"])],
+    ] = None,
+    hero: Annotated[
+        HeroKey | None, Query(title="Hero key filter", examples=["ana"])
+    ] = None,
     since: Annotated[
         int | None,
         Query(title="Lower bound (Unix timestamp)", ge=0),
@@ -222,10 +231,10 @@ async def get_hero_stats_history(
     data = await service.get_hero_stats_history(
         platform=str(platform),
         gamemode=str(gamemode),
-        region=str(region),
-        map_key=str(map_),
+        region=str(region) if region else None,
+        map_key=str(map_) if map_ else None,
         tier=tier,
-        hero=str(hero),
+        hero=str(hero) if hero else None,
         since=since,
         until=until,
     )

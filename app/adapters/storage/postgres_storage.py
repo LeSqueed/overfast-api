@@ -296,34 +296,51 @@ class PostgresStorage(metaclass=Singleton):
         self,
         platform: str,
         gamemode: str,
-        region: str,
-        map_: str,
-        tier: str,
-        hero: str,
+        region: str | None = None,
+        map_: str | None = None,
+        tier: str | None = None,
+        hero: str | None = None,
         since: int | None = None,
         until: int | None = None,
     ) -> list[dict]:
-        """Get hero stats history for a fixed platform/gamemode/region/map/tier/hero.
+        """Get hero stats history for a filter combination.
 
-        Returns list of dicts with 'captured_at' (int Unix ts), 'hero',
-        'pickrate', 'winrate', ordered by captured_at ascending.
+        ``platform`` and ``gamemode`` are required. ``region``, ``map_``,
+        ``tier`` and ``hero`` are optional filters. ``since``/``until`` bound
+        ``captured_at``.
+
+        Returns list of dicts with 'captured_at' (int Unix ts), 'platform',
+        'gamemode', 'region', 'map', 'tier', 'hero', 'pickrate', 'winrate',
+        ordered by captured_at ascending.
         """
-        params: list = [platform, gamemode, region, map_, tier, hero]
-        query = """SELECT captured_at, hero, pickrate, winrate
-               FROM hero_stats_snapshots
-               WHERE platform = $1
-                 AND gamemode = $2
-                 AND region = $3
-                 AND map = $4
-                 AND tier = $5
-                 AND hero = $6"""
+        params: list = [platform, gamemode]
+        conditions = ["platform = $1", "gamemode = $2"]
+        if region is not None:
+            params.append(region)
+            conditions.append(f"region = ${len(params)}")
+        if map_ is not None:
+            params.append(map_)
+            conditions.append(f"map = ${len(params)}")
+        if tier is not None:
+            params.append(tier)
+            conditions.append(f"tier = ${len(params)}")
+        if hero is not None:
+            params.append(hero)
+            conditions.append(f"hero = ${len(params)}")
         if since is not None:
-            query += " AND captured_at >= TO_TIMESTAMP($7)"
             params.append(since)
+            conditions.append(f"captured_at >= TO_TIMESTAMP(${len(params)})")
         if until is not None:
-            query += " AND captured_at <= TO_TIMESTAMP($8)"
             params.append(until)
-        query += " ORDER BY captured_at ASC"
+            conditions.append(f"captured_at <= TO_TIMESTAMP(${len(params)})")
+
+        where_clause = " AND ".join(conditions)
+        query = (
+            "SELECT captured_at, platform, gamemode, region, map, tier, hero, "  # noqa: S608
+            "pickrate, winrate FROM hero_stats_snapshots "
+            f"WHERE {where_clause} "
+            "ORDER BY captured_at ASC, map ASC, tier ASC, hero ASC"
+        )
 
         async with self._pool.acquire() as conn:  # type: ignore[union-attr]
             rows = await conn.fetch(query, *params)
@@ -331,6 +348,11 @@ class PostgresStorage(metaclass=Singleton):
         return [
             {
                 "captured_at": int(row["captured_at"].timestamp()),
+                "platform": row["platform"],
+                "gamemode": row["gamemode"],
+                "region": row["region"],
+                "map": row["map"],
+                "tier": row["tier"],
                 "hero": row["hero"],
                 "pickrate": row["pickrate"],
                 "winrate": row["winrate"],

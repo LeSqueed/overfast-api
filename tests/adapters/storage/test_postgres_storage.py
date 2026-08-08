@@ -525,12 +525,22 @@ class TestGetHeroStatsHistory:
             fetch_result=[
                 {
                     "captured_at": captured,
+                    "platform": "pc",
+                    "gamemode": "competitive",
+                    "region": "europe",
+                    "map": "busan",
+                    "tier": "gold",
                     "hero": "ana",
                     "pickrate": 5.5,
                     "winrate": 52.3,
                 },
                 {
                     "captured_at": captured,
+                    "platform": "pc",
+                    "gamemode": "competitive",
+                    "region": "europe",
+                    "map": "busan",
+                    "tier": "gold",
                     "hero": "ana",
                     "pickrate": 6.0,
                     "winrate": 53.0,
@@ -551,6 +561,8 @@ class TestGetHeroStatsHistory:
         assert result[0]["captured_at"] == int(captured.timestamp())
         assert result[1]["winrate"] == 53.0  # noqa: PLR2004
         assert result[0]["hero"] == "ana"
+        assert result[0]["map"] == "busan"
+        assert result[0]["platform"] == "pc"
 
     @pytest.mark.asyncio
     async def test_filters_by_since_until(self):
@@ -583,6 +595,29 @@ class TestGetHeroStatsHistory:
             1700000000,
             1700001000,
         ]
+
+    @pytest.mark.asyncio
+    async def test_optional_filters_build_dynamic_query(self):
+        conn = _make_connection(fetch_result=[])
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        await storage.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            since=1700000000,
+            until=1700001000,
+        )
+
+        query = conn.fetch.call_args[0][0]
+        args = list(conn.fetch.call_args[0][1:])
+        assert "region = $" not in query
+        assert "map = $" not in query
+        assert "tier = $" not in query
+        assert "hero = $" not in query
+        assert "captured_at >= TO_TIMESTAMP($3)" in query
+        assert "captured_at <= TO_TIMESTAMP($4)" in query
+        assert args == ["pc", "competitive", 1700000000, 1700001000]
 
 
 class TestDeleteOldHeroStatsSnapshots:

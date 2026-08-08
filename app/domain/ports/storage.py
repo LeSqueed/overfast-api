@@ -102,17 +102,22 @@ class StoragePort(Protocol):
         self,
         platform: str,
         gamemode: str,
-        region: str,
-        map_: str,
-        tier: str,
-        hero: str,
+        region: str | None = None,
+        map_: str | None = None,
+        tier: str | None = None,
+        hero: str | None = None,
         since: int | None = None,
         until: int | None = None,
     ) -> list[dict]:
         """Get hero stats history for a given filter combination.
 
-        Returns list of dicts with ``captured_at`` (int Unix ts), ``hero``,
-        ``pickrate``, ``winrate``, ordered by ``captured_at`` ascending.
+        ``platform`` and ``gamemode`` are required; ``region``, ``map_``,
+        ``tier`` and ``hero`` are optional filters. ``since``/``until`` are
+        optional Unix timestamps bounding ``captured_at``.
+
+        Returns list of dicts with ``captured_at`` (int Unix ts), ``platform``,
+        ``gamemode``, ``region``, ``map``, ``tier``, ``hero``, ``pickrate``,
+        ``winrate``, ordered by ``captured_at`` ascending.
         """
         ...
 

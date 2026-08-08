@@ -342,6 +342,11 @@ class HeroStatsSummary(BaseModel):
 
 class HeroStatsHistoryPoint(BaseModel):
     captured_at: datetime = Field(..., description="Snapshot capture timestamp (UTC)")
+    platform: str = Field(..., description="Player platform (e.g. pc)")
+    gamemode: str = Field(..., description="Gamemode (e.g. competitive)")
+    region: str = Field(..., description="Player region (e.g. europe)")
+    map: str = Field(..., description="Map key (e.g. busan)")
+    tier: str = Field(..., description="Competitive tier (e.g. gold, or 'all')")
     hero: HeroKey = Field(
         ..., description="Hero key used to identify Overwatch heroes in general"
     )

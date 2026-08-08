@@ -246,13 +246,17 @@ class HeroService(StaticDataService):
         """Fetch hero pickrate/winrate for the full grid and store snapshots.
 
         Grid: every platform x gamemode x region x map x tier combination.
-        Stores one batch (all rows share ``captured_at``) via the storage adapter.
+        Rows are flushed to storage incrementally (per map) so progress is
+        persisted even if the run is interrupted, and all rows of a run share
+        the same ``captured_at`` timestamp.
 
         Returns:
             Number of rows stored.
         """
         captured_at = int(time.time())
+        total_stored = 0
         rows: list[dict] = []
+        current_map_key: str | None = None
         for (
             platform,
             gamemode,
@@ -260,6 +264,11 @@ class HeroService(StaticDataService):
             map_key,
             tier,
         ) in self._hero_stats_snapshot_grid():
+            if current_map_key is not None and map_key != current_map_key:
+                total_stored += await self._flush_hero_stats_snapshot(captured_at, rows)
+                rows = []
+            current_map_key = map_key
+
             try:
                 stats = await self._fetch_hero_stats_for_snapshot(
                     platform, gamemode, region, map_key, tier
@@ -296,39 +305,49 @@ class HeroService(StaticDataService):
                 )
 
         if rows:
-            await self.storage.store_hero_stats_snapshots(captured_at, rows)
-            logger.info(
-                "[hero-stats-snapshot] Stored {} rows for timestamp {}",
-                len(rows),
-                captured_at,
-            )
+            total_stored += await self._flush_hero_stats_snapshot(captured_at, rows)
+        return total_stored
+
+    async def _flush_hero_stats_snapshot(
+        self, captured_at: int, rows: list[dict]
+    ) -> int:
+        """Persist one snapshot chunk and log progress."""
+        if not rows:
+            return 0
+        await self.storage.store_hero_stats_snapshots(captured_at, rows)
+        logger.info(
+            "[hero-stats-snapshot] Stored {} rows for timestamp {}",
+            len(rows),
+            captured_at,
+        )
         return len(rows)
 
     async def get_hero_stats_history(
         self,
         platform: str,
         gamemode: str,
-        region: str,
-        map_key: str,
-        tier: str,
-        hero: str,
+        region: str | None = None,
+        map_key: str | None = None,
+        tier: str | None = None,
+        hero: str | None = None,
         since: int | None = None,
         until: int | None = None,
     ) -> list[dict]:
-        """Return historical pickrate/winrate for a fixed filter combination.
+        """Return historical pickrate/winrate snapshots matching the filters.
 
         Args:
             platform: Platform value (e.g. "pc").
             gamemode: Gamemode value (e.g. "competitive").
-            region: Region value (e.g. "europe").
-            map_key: Map key (e.g. "busan").
-            tier: Competitive division (e.g. "gold") or "all".
-            hero: Hero key (e.g. "ana").
+            region: Optional region value (e.g. "europe").
+            map_key: Optional map key (e.g. "busan").
+            tier: Optional competitive division (e.g. "gold") or "all".
+            hero: Optional hero key (e.g. "ana").
             since: Optional lower bound (Unix ts).
             until: Optional upper bound (Unix ts).
 
         Returns:
-            List of dicts with captured_at, hero, pickrate, winrate.
+            List of dicts with captured_at, platform, gamemode, region, map,
+            tier, hero, pickrate, winrate.
         """
         return await self.storage.get_hero_stats_history(
             platform=platform,
