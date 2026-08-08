@@ -46,6 +46,19 @@ server {
     alias /static/favicon.ico;
   }
 
+  # Overwatch rates dashboard (static SPA under /dashboard/)
+  location /dashboard {
+    root /static;
+    index index.html;
+    try_files $uri $uri/ /dashboard/index.html;
+
+    sendfile on;
+    tcp_nopush on;
+
+    expires 1h;
+    add_header Cache-Control public;
+  }
+
   # Block /metrics from public access (FastAPI metrics endpoint)
   location /metrics {
     return 404;
