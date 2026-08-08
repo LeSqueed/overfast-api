@@ -52,6 +52,9 @@ async def metrics() -> Response:
         storage_entries_total.labels(table="player_profiles").set(
             stats["player_profiles_count"],
         )
+        storage_entries_total.labels(table="hero_stats_snapshots").set(
+            stats.get("hero_stats_snapshots_count", 0),
+        )
 
         # Data freshness (player profile ages)
         if stats.get("player_profile_age_p50", 0) > 0:

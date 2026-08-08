@@ -259,3 +259,84 @@ def test_get_hero_stats_parser_parsing_error(client: TestClient):
 
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
     assert response.json() == {"error": settings.internal_server_error_message}
+
+
+# ---------------------------------------------------------------------------
+# /heroes/stats/history
+# ---------------------------------------------------------------------------
+
+
+def test_get_hero_stats_history_missing_parameters(client: TestClient):
+    response = client.get("/heroes/stats/history")
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+def test_get_hero_stats_history_success(client: TestClient):
+    with patch(
+        "app.domain.services.hero_service.HeroService.get_hero_stats_history",
+        return_value=[
+            {
+                "captured_at": 1700000000,
+                "hero": "ana",
+                "pickrate": 5.5,
+                "winrate": 52.3,
+            },
+            {
+                "captured_at": 1700003600,
+                "hero": "ana",
+                "pickrate": 6.0,
+                "winrate": 53.1,
+            },
+        ],
+    ):
+        response = client.get(
+            "/heroes/stats/history",
+            params={
+                "platform": "pc",
+                "gamemode": "competitive",
+                "region": "europe",
+                "map": "busan",
+                "tier": "gold",
+                "hero": "ana",
+            },
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert len(data) == 2  # noqa: PLR2004
+    assert set(data[0].keys()) == {"captured_at", "hero", "pickrate", "winrate"}
+    assert data[1]["winrate"] == 53.1  # noqa: PLR2004
+
+
+def test_get_hero_stats_history_since_until(client: TestClient):
+    with patch(
+        "app.domain.services.hero_service.HeroService.get_hero_stats_history",
+        return_value=[],
+    ) as mock_history:
+        response = client.get(
+            "/heroes/stats/history",
+            params={
+                "platform": "pc",
+                "gamemode": "competitive",
+                "region": "europe",
+                "map": "busan",
+                "tier": "gold",
+                "hero": "ana",
+                "since": 1700000000,
+                "until": 1700003600,
+            },
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == []
+    mock_history.assert_awaited_once_with(
+        platform="pc",
+        gamemode="competitive",
+        region="europe",
+        map_key="busan",
+        tier="gold",
+        hero="ana",
+        since=1700000000,
+        until=1700003600,
+    )

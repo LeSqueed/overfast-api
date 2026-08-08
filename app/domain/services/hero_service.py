@@ -1,12 +1,22 @@
 """Hero domain service — heroes list, hero detail, hero stats"""
 
 import json
+import time
 from typing import TYPE_CHECKING, Any
 
 from app.config import settings
-from app.domain.enums import Locale, PlayerGamemode, SubRole
+from app.domain.enums import (
+    CompetitiveDivisionFilter,
+    Locale,
+    MapKey,
+    PlayerGamemode,
+    PlayerPlatform,
+    PlayerRegion,
+    SubRole,
+)
 from app.domain.exceptions import (
     InvalidGamemodeFilterError,
+    ParserBlizzardError,
     ParserInternalError,
     ParserParsingError,
 )
@@ -19,14 +29,11 @@ from app.domain.parsers.heroes import (
 )
 from app.domain.parsers.heroes_hitpoints import parse_heroes_hitpoints
 from app.domain.services.static_data_service import StaticDataService, StaticFetchConfig
+from app.infrastructure.logger import logger
 
 if TYPE_CHECKING:
     from app.domain.enums import (
-        CompetitiveDivisionFilter,
         HeroGamemode,
-        MapKey,
-        PlayerPlatform,
-        PlayerRegion,
         Role,
     )
 
@@ -230,6 +237,170 @@ class HeroService(StaticDataService):
             settings.hero_stats_cache_timeout,
         )
         return data, False, 0
+
+    # ------------------------------------------------------------------
+    # Hero stats history  (per-map/per-tier snapshots)
+    # ------------------------------------------------------------------
+
+    async def snapshot_hero_stats(self) -> int:
+        """Fetch hero pickrate/winrate for the full grid and store snapshots.
+
+        Grid: every platform x gamemode x region x map x tier combination.
+        Stores one batch (all rows share ``captured_at``) via the storage adapter.
+
+        Returns:
+            Number of rows stored.
+        """
+        captured_at = int(time.time())
+        rows: list[dict] = []
+        for (
+            platform,
+            gamemode,
+            region,
+            map_key,
+            tier,
+        ) in self._hero_stats_snapshot_grid():
+            try:
+                stats = await self._fetch_hero_stats_for_snapshot(
+                    platform, gamemode, region, map_key, tier
+                )
+            except (
+                InvalidGamemodeFilterError,
+                ParserInternalError,
+                ParserBlizzardError,
+            ) as exc:
+                logger.warning(
+                    "[hero-stats-snapshot] Skipping {}/{}/{}/{}/{}: {}",
+                    platform,
+                    gamemode,
+                    region,
+                    map_key,
+                    tier,
+                    exc,
+                )
+                continue
+            for stat in stats:
+                rows.extend(
+                    [
+                        {
+                            "platform": platform.value,
+                            "gamemode": gamemode.value,
+                            "region": region.value,
+                            "map": map_key,
+                            "tier": tier,
+                            "hero": stat["hero"],
+                            "pickrate": stat["pickrate"],
+                            "winrate": stat["winrate"],
+                        }
+                    ]
+                )
+
+        if rows:
+            await self.storage.store_hero_stats_snapshots(captured_at, rows)
+            logger.info(
+                "[hero-stats-snapshot] Stored {} rows for timestamp {}",
+                len(rows),
+                captured_at,
+            )
+        return len(rows)
+
+    async def get_hero_stats_history(
+        self,
+        platform: str,
+        gamemode: str,
+        region: str,
+        map_key: str,
+        tier: str,
+        hero: str,
+        since: int | None = None,
+        until: int | None = None,
+    ) -> list[dict]:
+        """Return historical pickrate/winrate for a fixed filter combination.
+
+        Args:
+            platform: Platform value (e.g. "pc").
+            gamemode: Gamemode value (e.g. "competitive").
+            region: Region value (e.g. "europe").
+            map_key: Map key (e.g. "busan").
+            tier: Competitive division (e.g. "gold") or "all".
+            hero: Hero key (e.g. "ana").
+            since: Optional lower bound (Unix ts).
+            until: Optional upper bound (Unix ts).
+
+        Returns:
+            List of dicts with captured_at, hero, pickrate, winrate.
+        """
+        return await self.storage.get_hero_stats_history(
+            platform=platform,
+            gamemode=gamemode,
+            region=region,
+            map_=map_key,
+            tier=tier,
+            hero=hero,
+            since=since,
+            until=until,
+        )
+
+    def _hero_stats_snapshot_grid(self) -> list[tuple]:
+        """Build the full snapshot grid: platform x gamemode x region x map x tier.
+
+        Only competitive gamemode is tracked per product decision. Tiers include
+        "all" plus every CompetitiveDivisionFilter value.
+        """
+        tiers = ["all", *[tier.value for tier in CompetitiveDivisionFilter]]
+        grid: list[tuple] = []
+        for platform in PlayerPlatform:
+            for region in PlayerRegion:
+                for map_key in MapKey:
+                    for tier in tiers:
+                        grid.extend(
+                            [
+                                (
+                                    platform,
+                                    PlayerGamemode.COMPETITIVE,
+                                    region,
+                                    map_key.value,
+                                    tier,
+                                )
+                            ]
+                        )
+        return grid
+
+    async def _fetch_hero_stats_for_snapshot(
+        self,
+        platform: PlayerPlatform,
+        gamemode: PlayerGamemode,
+        region: PlayerRegion,
+        map_key: str,
+        tier: str,
+    ) -> list[dict]:
+        """Fetch and parse hero stats for one grid combination.
+
+        Uses the Blizzard client throttle via parse_hero_stats_summary.
+        """
+        competitive_division = None if tier == "all" else tier
+        for gamemode_filter in await self._get_hero_stats_gamemode_filters(gamemode):
+            try:
+                data = await parse_hero_stats_summary(
+                    self.blizzard_client,
+                    platform=platform,
+                    gamemode=gamemode,
+                    gamemode_filter=gamemode_filter,
+                    region=region,
+                    map_filter=map_key,
+                    competitive_division=competitive_division,
+                    order_by="hero:asc",
+                )
+                break  # filter worked — stop retrying (data may legitimately be empty)
+            except InvalidGamemodeFilterError as exc:
+                gamemode_filter_exception = exc
+        else:
+            # All filter candidates exhausted without a successful call.
+            blizzard_url = f"{settings.blizzard_host}{settings.hero_stats_path}"
+            raise ParserInternalError(
+                blizzard_url, gamemode_filter_exception
+            ) from gamemode_filter_exception
+        return data
 
     async def _get_hero_stats_gamemode_filters(
         self, gamemode: PlayerGamemode

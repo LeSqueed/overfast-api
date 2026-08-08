@@ -6,6 +6,7 @@ import pytest
 from app.domain.enums import Locale, PlayerGamemode, PlayerPlatform, PlayerRegion
 from app.domain.exceptions import (
     InvalidGamemodeFilterError,
+    ParserBlizzardError,
     ParserInternalError,
     ParserParsingError,
 )
@@ -284,3 +285,112 @@ def test_dict_insert_value_before_key_valid(
     actual = dict_insert_value_before_key(input_dict, key, new_key, new_value)
 
     assert actual == result_dict
+
+
+class TestHeroServiceSnapshot:
+    @pytest.mark.asyncio
+    async def test_snapshot_stores_rows(self):
+        svc = _make_hero_service()
+        expected_stat = {"hero": "ana", "pickrate": 5.5, "winrate": 52.3}
+
+        with patch(
+            "app.domain.services.hero_service.parse_hero_stats_summary",
+            return_value=[expected_stat],
+        ) as mock_parse:
+            count = await svc.snapshot_hero_stats()
+
+        assert count > 0
+        assert mock_parse.await_count > 0
+        cast("Any", svc.storage).store_hero_stats_snapshots.assert_awaited_once()
+        rows = cast("Any", svc.storage).store_hero_stats_snapshots.call_args[0][1]
+        assert all(row["hero"] == "ana" for row in rows)
+        valid_tiers = {
+            "all",
+            "bronze",
+            "silver",
+            "gold",
+            "platinum",
+            "diamond",
+            "master",
+            "grandmaster",
+        }
+        assert all(row["tier"] in valid_tiers for row in rows)
+
+    @pytest.mark.asyncio
+    async def test_snapshot_skips_failed_combos(self):
+        svc = _make_hero_service()
+        svc._get_hero_stats_gamemode_filters = AsyncMock(return_value=["1"])
+        expected_stat = {"hero": "ana", "pickrate": 5.5, "winrate": 52.3}
+
+        async def _parse(*_args, **_kwargs):
+            if _kwargs.get("map_filter") == "busan":
+                raise ParserBlizzardError(status_code=400, message="map not compatible")
+            return [expected_stat]
+
+        with patch(
+            "app.domain.services.hero_service.parse_hero_stats_summary",
+            side_effect=_parse,
+        ):
+            count = await svc.snapshot_hero_stats()
+
+        assert count > 0
+        stored_rows = cast("Any", svc.storage).store_hero_stats_snapshots.call_args[0][
+            1
+        ]
+        stored_maps = {row["map"] for row in stored_rows}
+        assert "busan" not in stored_maps
+        assert stored_maps != set()
+
+    @pytest.mark.asyncio
+    async def test_snapshot_no_rows_skips_storage(self):
+        svc = _make_hero_service()
+        with patch(
+            "app.domain.services.hero_service.parse_hero_stats_summary",
+            side_effect=ParserInternalError(
+                "https://blizzard", ValueError("always fails")
+            ),
+        ):
+            count = await svc.snapshot_hero_stats()
+
+        assert count == 0
+        cast("Any", svc.storage).store_hero_stats_snapshots.assert_not_awaited()
+
+    def test_snapshot_grid_uses_competitive_only(self):
+        svc = _make_hero_service()
+        grid = svc._hero_stats_snapshot_grid()
+
+        assert len(grid) > 0
+        assert all(entry[1] == PlayerGamemode.COMPETITIVE for entry in grid)
+        assert {entry[4] for entry in grid} >= {"all", "gold"}
+
+
+class TestHeroServiceHistory:
+    @pytest.mark.asyncio
+    async def test_get_history_delegates_to_storage(self):
+        svc = _make_hero_service()
+        cast("Any", svc.storage).get_hero_stats_history.return_value = [
+            {"captured_at": 1700000000, "hero": "ana", "pickrate": 5.5, "winrate": 52.3}
+        ]
+
+        result = await svc.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            map_key="busan",
+            tier="gold",
+            hero="ana",
+            since=1700000000,
+            until=1700001000,
+        )
+
+        assert result[0]["hero"] == "ana"
+        cast("Any", svc.storage).get_hero_stats_history.assert_awaited_once_with(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            map_="busan",
+            tier="gold",
+            hero="ana",
+            since=1700000000,
+            until=1700001000,
+        )

@@ -1,5 +1,7 @@
 """Tests for the StoragePort contract — exercised via FakeStorage"""
 
+import time
+
 import pytest
 
 from app.domain.ports.storage import StaticDataCategory
@@ -166,6 +168,148 @@ class TestStorageStats:
         assert stats["static_data_count"] == 0
         assert stats["player_profiles_count"] == 0
         assert stats["size_bytes"] >= 0
+
+
+class TestHeroStatsSnapshots:
+    """Test hero stats snapshot storage operations"""
+
+    @pytest.mark.asyncio
+    async def test_store_and_query_history(self, storage_db):
+        captured_at = 1700000000
+        rows = [
+            {
+                "platform": "pc",
+                "gamemode": "competitive",
+                "region": "europe",
+                "map": "busan",
+                "tier": "gold",
+                "hero": "ana",
+                "pickrate": 5.5,
+                "winrate": 52.3,
+            },
+            {
+                "platform": "console",
+                "gamemode": "competitive",
+                "region": "europe",
+                "map": "busan",
+                "tier": "gold",
+                "hero": "ana",
+                "pickrate": 6.0,
+                "winrate": 53.0,
+            },
+        ]
+
+        await storage_db.store_hero_stats_snapshots(captured_at, rows)
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            map_="busan",
+            tier="gold",
+            hero="ana",
+        )
+
+        assert len(result) == 1
+        assert result[0]["captured_at"] == captured_at
+        assert result[0]["pickrate"] == 5.5  # noqa: PLR2004
+        assert result[0]["winrate"] == 52.3  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_history_ordered_by_captured_at(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(
+            1700000002, [{**base, "pickrate": 7.0}]
+        )
+        await storage_db.store_hero_stats_snapshots(
+            1700000001, [{**base, "pickrate": 6.0}]
+        )
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            map_="busan",
+            tier="all",
+            hero="ana",
+        )
+
+        assert [r["captured_at"] for r in result] == [1700000001, 1700000002]
+        assert [r["pickrate"] for r in result] == [6.0, 7.0]
+
+    @pytest.mark.asyncio
+    async def test_history_since_until_filters(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "gold",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(
+            1700000001, [{**base, "pickrate": 1.0}]
+        )
+        await storage_db.store_hero_stats_snapshots(
+            1700000002, [{**base, "pickrate": 2.0}]
+        )
+        await storage_db.store_hero_stats_snapshots(
+            1700000003, [{**base, "pickrate": 3.0}]
+        )
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            map_="busan",
+            tier="gold",
+            hero="ana",
+            since=1700000002,
+            until=1700000003,
+        )
+
+        assert [r["captured_at"] for r in result] == [1700000002, 1700000003]
+
+    @pytest.mark.asyncio
+    async def test_delete_old_snapshots(self, storage_db):
+        now = int(time.time())
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "gold",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(now - 100, [{**base}])
+        await storage_db.store_hero_stats_snapshots(now - 10, [{**base}])
+
+        deleted = await storage_db.delete_old_hero_stats_snapshots(60)
+
+        assert deleted == 1
+        remaining = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            map_="busan",
+            tier="gold",
+            hero="ana",
+        )
+        assert len(remaining) == 1
+        assert remaining[0]["captured_at"] == now - 10
 
 
 class TestDataIntegrity:

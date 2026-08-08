@@ -16,6 +16,7 @@ from app.adapters.tasks.worker import (
     refresh_maps,
     refresh_player_profile,
     refresh_roles,
+    snapshot_hero_stats,
 )
 from app.domain.enums import HeroKey, Locale
 
@@ -207,6 +208,50 @@ class TestRefreshPlayerProfile:
 
 
 # ── cleanup_stale_players ─────────────────────────────────────────────────────
+
+
+class TestSnapshotHeroStats:
+    @pytest.mark.asyncio
+    async def test_skipped_when_disabled(self):
+        mock_service = AsyncMock()
+        mock_storage = AsyncMock()
+        with patch("app.adapters.tasks.worker.settings") as mock_settings:
+            mock_settings.hero_stats_snapshot_enabled = False
+            await cast("Any", snapshot_hero_stats).__wrapped__(
+                mock_service, mock_storage
+            )
+
+        mock_service.snapshot_hero_stats.assert_not_awaited()
+        mock_storage.delete_old_hero_stats_snapshots.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_snapshots_and_prunes(self):
+        mock_service = AsyncMock()
+        mock_service.snapshot_hero_stats.return_value = 1500
+        mock_storage = AsyncMock()
+        mock_storage.delete_old_hero_stats_snapshots.return_value = 100
+        with patch("app.adapters.tasks.worker.settings") as mock_settings:
+            mock_settings.hero_stats_snapshot_enabled = True
+            mock_settings.hero_stats_snapshot_max_age = 31536000
+            await cast("Any", snapshot_hero_stats).__wrapped__(
+                mock_service, mock_storage
+            )
+
+        mock_service.snapshot_hero_stats.assert_awaited_once()
+        mock_storage.delete_old_hero_stats_snapshots.assert_awaited_once_with(31536000)
+
+    @pytest.mark.asyncio
+    async def test_exception_is_swallowed(self):
+        mock_service = AsyncMock()
+        mock_service.snapshot_hero_stats.side_effect = Exception("snapshot failed")
+        mock_storage = AsyncMock()
+        with patch("app.adapters.tasks.worker.settings") as mock_settings:
+            mock_settings.hero_stats_snapshot_enabled = True
+            await cast("Any", snapshot_hero_stats).__wrapped__(
+                mock_service, mock_storage
+            )
+
+        mock_storage.delete_old_hero_stats_snapshots.assert_not_awaited()
 
 
 class TestCleanupStalePlayers:

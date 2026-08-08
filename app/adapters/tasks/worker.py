@@ -219,6 +219,39 @@ async def refresh_player_profile(
 # ─── Cron tasks ───────────────────────────────────────────────────────────────
 
 
+@broker.task(schedule=[{"cron": settings.hero_stats_snapshot_cron}])
+async def snapshot_hero_stats(service: HeroServiceDep, storage: StorageDep) -> None:
+    """Fetch and store the full hero stats snapshot grid (runs on a cron schedule).
+
+    Also prunes snapshots older than ``hero_stats_snapshot_max_age``.
+    """
+    if not settings.hero_stats_snapshot_enabled:
+        logger.debug("[Worker] snapshot_hero_stats: disabled, skipping.")
+        return
+
+    logger.info("[Worker] snapshot_hero_stats: Starting hero stats snapshot...")
+    try:
+        rows_stored = await service.snapshot_hero_stats()
+    except Exception:  # noqa: BLE001
+        logger.exception("[Worker] snapshot_hero_stats: Failed.")
+        return
+
+    logger.info("[Worker] snapshot_hero_stats: Stored {} snapshot rows.", rows_stored)
+
+    if settings.hero_stats_snapshot_max_age > 0:
+        try:
+            deleted = await storage.delete_old_hero_stats_snapshots(
+                settings.hero_stats_snapshot_max_age
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("[Worker] snapshot_hero_stats: Cleanup failed.")
+            return
+        logger.info(
+            "[Worker] snapshot_hero_stats: Deleted {} old snapshot rows.",
+            deleted,
+        )
+
+
 @broker.task(schedule=[{"cron": "0 3 * * *"}])
 async def cleanup_stale_players(storage: StorageDep) -> None:
     """Delete player profiles older than ``player_profile_max_age`` (runs daily at 03:00 UTC)."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import time
 from compression import zstd
@@ -251,6 +252,114 @@ class PostgresStorage(metaclass=Singleton):
             )
 
     # ------------------------------------------------------------------ #
+    # Hero stats snapshots
+    # ------------------------------------------------------------------ #
+
+    @track_storage_operation("hero_stats_snapshots", "set")
+    async def store_hero_stats_snapshots(
+        self, captured_at: int, rows: list[dict]
+    ) -> None:
+        """Store a batch of hero stats snapshot rows in a single transaction.
+
+        Args:
+            captured_at: Unix timestamp shared by every row.
+            rows: Dicts with platform, gamemode, region, map, tier, hero,
+                pickrate and winrate keys.
+        """
+        if not rows:
+            return
+        captured_at_dt = datetime.datetime.fromtimestamp(captured_at, tz=datetime.UTC)
+        async with self._pool.acquire() as conn, conn.transaction():  # type: ignore[union-attr]
+            await conn.executemany(
+                """INSERT INTO hero_stats_snapshots
+                   (captured_at, platform, gamemode, region, map, tier,
+                    hero, pickrate, winrate)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+                [
+                    (
+                        captured_at_dt,
+                        row["platform"],
+                        row["gamemode"],
+                        row["region"],
+                        row["map"],
+                        row["tier"],
+                        row["hero"],
+                        row["pickrate"],
+                        row["winrate"],
+                    )
+                    for row in rows
+                ],
+            )
+
+    @track_storage_operation("hero_stats_snapshots", "get")
+    async def get_hero_stats_history(
+        self,
+        platform: str,
+        gamemode: str,
+        region: str,
+        map_: str,
+        tier: str,
+        hero: str,
+        since: int | None = None,
+        until: int | None = None,
+    ) -> list[dict]:
+        """Get hero stats history for a fixed platform/gamemode/region/map/tier/hero.
+
+        Returns list of dicts with 'captured_at' (int Unix ts), 'hero',
+        'pickrate', 'winrate', ordered by captured_at ascending.
+        """
+        params: list = [platform, gamemode, region, map_, tier, hero]
+        query = """SELECT captured_at, hero, pickrate, winrate
+               FROM hero_stats_snapshots
+               WHERE platform = $1
+                 AND gamemode = $2
+                 AND region = $3
+                 AND map = $4
+                 AND tier = $5
+                 AND hero = $6"""
+        if since is not None:
+            query += " AND captured_at >= TO_TIMESTAMP($7)"
+            params.append(since)
+        if until is not None:
+            query += " AND captured_at <= TO_TIMESTAMP($8)"
+            params.append(until)
+        query += " ORDER BY captured_at ASC"
+
+        async with self._pool.acquire() as conn:  # type: ignore[union-attr]
+            rows = await conn.fetch(query, *params)
+
+        return [
+            {
+                "captured_at": int(row["captured_at"].timestamp()),
+                "hero": row["hero"],
+                "pickrate": row["pickrate"],
+                "winrate": row["winrate"],
+            }
+            for row in rows
+        ]
+
+    @track_storage_operation("hero_stats_snapshots", "delete")
+    async def delete_old_hero_stats_snapshots(self, max_age_seconds: int) -> int:
+        """Delete hero stats snapshots older than max_age_seconds.
+
+        Returns:
+            Number of deleted rows.
+        """
+        cutoff = time.time() - max_age_seconds
+        async with self._pool.acquire() as conn:  # type: ignore[union-attr]
+            result = await conn.execute(
+                "DELETE FROM hero_stats_snapshots WHERE captured_at < TO_TIMESTAMP($1)",
+                cutoff,
+            )
+        deleted = int(result.split()[-1])
+        logger.info(
+            "Deleted {} old hero stats snapshots (max_age={}s)",
+            deleted,
+            max_age_seconds,
+        )
+        return deleted
+
+    # ------------------------------------------------------------------ #
     # Maintenance
     # ------------------------------------------------------------------ #
 
@@ -276,7 +385,9 @@ class PostgresStorage(metaclass=Singleton):
     async def clear_all_data(self) -> None:
         """Truncate all tables (for testing)."""
         async with self._pool.acquire() as conn:  # type: ignore[union-attr]
-            await conn.execute("TRUNCATE static_data, player_profiles")
+            await conn.execute(
+                "TRUNCATE static_data, player_profiles, hero_stats_snapshots"
+            )
 
     # ------------------------------------------------------------------ #
     # Statistics
@@ -288,6 +399,7 @@ class PostgresStorage(metaclass=Singleton):
             "size_bytes": 0,
             "static_data_count": 0,
             "player_profiles_count": 0,
+            "hero_stats_snapshots_count": 0,
             "player_profile_age_p50": 0,
             "player_profile_age_p90": 0,
             "player_profile_age_p99": 0,
@@ -299,6 +411,11 @@ class PostgresStorage(metaclass=Singleton):
 
                 row = await conn.fetchrow("SELECT COUNT(*) AS n FROM player_profiles")
                 stats["player_profiles_count"] = row["n"]
+
+                row = await conn.fetchrow(
+                    "SELECT COUNT(*) AS n FROM hero_stats_snapshots"
+                )
+                stats["hero_stats_snapshots_count"] = row["n"]
 
                 # Approximate disk size via pg_total_relation_size
                 row = await conn.fetchrow(

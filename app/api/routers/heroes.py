@@ -17,6 +17,7 @@ from app.api.models.heroes import (
     Hero,
     HeroParserErrorMessage,
     HeroShort,
+    HeroStatsHistoryPoint,
     HeroStatsSummary,
 )
 from app.config import settings
@@ -149,6 +150,90 @@ async def get_hero_stats(
         settings.hero_stats_cache_timeout,
         is_stale,
         age,
+    )
+    return data
+
+
+@router.get(
+    "/stats/history",
+    responses={
+        **routes_responses,
+        status.HTTP_400_BAD_REQUEST: {
+            "model": BadRequestErrorMessage,
+            "description": "Bad Request Error",
+        },
+    },
+    tags=[RouteTag.HEROES],
+    summary="Get hero stats history",
+    description=(
+        "Get historical hero pickrate/winrate snapshots for a fixed "
+        "platform, gamemode, region, map, tier and hero combination."
+        "<br />Only combinations captured by the snapshot cron are available."
+    ),
+    operation_id="get_hero_stats_history",
+    response_model=list[HeroStatsHistoryPoint],
+)
+async def get_hero_stats_history(
+    response: Response,
+    service: HeroServiceDep,
+    platform: Annotated[
+        PlayerPlatform, Query(title="Player platform filter", examples=["pc"])
+    ],
+    gamemode: Annotated[
+        PlayerGamemode,
+        Query(
+            title="Gamemode",
+            description="Filter on a specific gamemode.",
+            examples=["competitive"],
+        ),
+    ],
+    region: Annotated[
+        PlayerRegion,
+        Query(
+            title="Region",
+            description="Filter on a specific player region.",
+            examples=["europe"],
+        ),
+    ],
+    map_: Annotated[
+        MapKey, Query(alias="map", title="Map key filter", examples=["busan"])
+    ],
+    tier: Annotated[
+        str,
+        Query(
+            title="Competitive tier",
+            description=(
+                "Competitive division, or 'all' for the combined snapshot. "
+                "Only tiers present in captured snapshots are returned."
+            ),
+            examples=["gold", "all"],
+        ),
+    ],
+    hero: Annotated[HeroKey, Query(title="Hero key filter", examples=["ana"])],
+    since: Annotated[
+        int | None,
+        Query(title="Lower bound (Unix timestamp)", ge=0),
+    ] = None,
+    until: Annotated[
+        int | None,
+        Query(title="Upper bound (Unix timestamp)", ge=0),
+    ] = None,
+) -> Any:
+    data = await service.get_hero_stats_history(
+        platform=str(platform),
+        gamemode=str(gamemode),
+        region=str(region),
+        map_key=str(map_),
+        tier=tier,
+        hero=str(hero),
+        since=since,
+        until=until,
+    )
+    apply_swr_headers(
+        response,
+        settings.hero_stats_cache_timeout,
+        False,
+        0,
     )
     return data
 

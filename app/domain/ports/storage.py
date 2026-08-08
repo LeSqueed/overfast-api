@@ -87,6 +87,44 @@ class StoragePort(Protocol):
         """
         ...
 
+    async def store_hero_stats_snapshots(
+        self, captured_at: int, rows: list[dict]
+    ) -> None:
+        """Store a batch of hero stats snapshot rows.
+
+        ``rows`` are dicts with ``platform``, ``gamemode``, ``region``,
+        ``map``, ``tier``, ``hero``, ``pickrate`` and ``winrate`` keys.
+        All rows share the same ``captured_at`` timestamp.
+        """
+        ...
+
+    async def get_hero_stats_history(
+        self,
+        platform: str,
+        gamemode: str,
+        region: str,
+        map_: str,
+        tier: str,
+        hero: str,
+        since: int | None = None,
+        until: int | None = None,
+    ) -> list[dict]:
+        """Get hero stats history for a given filter combination.
+
+        Returns list of dicts with ``captured_at`` (int Unix ts), ``hero``,
+        ``pickrate``, ``winrate``, ordered by ``captured_at`` ascending.
+        """
+        ...
+
+    async def delete_old_hero_stats_snapshots(self, max_age_seconds: int) -> int:
+        """
+        Delete hero stats snapshots older than max_age_seconds.
+
+        Returns:
+            Number of deleted rows
+        """
+        ...
+
     async def clear_all_data(self) -> None:
         """Clear all data including static data (for testing)"""
         ...

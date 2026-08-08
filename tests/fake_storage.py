@@ -22,6 +22,7 @@ class FakeStorage:
         self._static: dict[str, dict] = {}
         self._profiles: dict[str, dict] = {}
         self._battletag_index: dict[str, str] = {}
+        self._hero_stats_snapshots: list[dict] = []
 
     async def initialize(self) -> None:
         pass
@@ -98,6 +99,59 @@ class FakeStorage:
             self._battletag_index[battletag] = player_id
 
     # ------------------------------------------------------------------ #
+    # Hero stats snapshots
+    # ------------------------------------------------------------------ #
+
+    async def store_hero_stats_snapshots(
+        self, captured_at: int, rows: list[dict]
+    ) -> None:
+        for row in rows:
+            self._hero_stats_snapshots.append({**row, "captured_at": captured_at})
+
+    async def get_hero_stats_history(
+        self,
+        platform: str,
+        gamemode: str,
+        region: str,
+        map_: str,
+        tier: str,
+        hero: str,
+        since: int | None = None,
+        until: int | None = None,
+    ) -> list[dict]:
+        matching = [
+            row
+            for row in self._hero_stats_snapshots
+            if row["platform"] == platform
+            and row["gamemode"] == gamemode
+            and row["region"] == region
+            and row["map"] == map_
+            and row["tier"] == tier
+            and row["hero"] == hero
+            and (since is None or row["captured_at"] >= since)
+            and (until is None or row["captured_at"] <= until)
+        ]
+        matching.sort(key=lambda row: row["captured_at"])
+        return [
+            {
+                "captured_at": row["captured_at"],
+                "hero": row["hero"],
+                "pickrate": row["pickrate"],
+                "winrate": row["winrate"],
+            }
+            for row in matching
+        ]
+
+    async def delete_old_hero_stats_snapshots(self, max_age_seconds: int) -> int:
+        cutoff = time.time() - max_age_seconds
+        to_delete = [
+            row for row in self._hero_stats_snapshots if row["captured_at"] < cutoff
+        ]
+        for row in to_delete:
+            self._hero_stats_snapshots.remove(row)
+        return len(to_delete)
+
+    # ------------------------------------------------------------------ #
     # Maintenance
     # ------------------------------------------------------------------ #
 
@@ -117,6 +171,7 @@ class FakeStorage:
         self._static.clear()
         self._profiles.clear()
         self._battletag_index.clear()
+        self._hero_stats_snapshots.clear()
 
     # ------------------------------------------------------------------ #
     # Statistics
@@ -130,6 +185,7 @@ class FakeStorage:
             "size_bytes": 0,
             "static_data_count": len(self._static),
             "player_profiles_count": n,
+            "hero_stats_snapshots_count": len(self._hero_stats_snapshots),
             "player_profile_age_p50": ages[n // 2] if ages else 0,
             "player_profile_age_p90": ages[min(int(n * 0.9), n - 1)] if ages else 0,
             "player_profile_age_p99": ages[min(int(n * 0.99), n - 1)] if ages else 0,

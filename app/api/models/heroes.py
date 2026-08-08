@@ -1,5 +1,7 @@
 """Set of pydantic models used for Heroes API routes"""
 
+from datetime import datetime  # noqa: TC003  (needed at runtime by pydantic)
+
 from pydantic import BaseModel, Field, HttpUrl
 
 from app.domain.enums import (
@@ -331,6 +333,15 @@ class HeroParserErrorMessage(BaseModel):
 
 
 class HeroStatsSummary(BaseModel):
+    hero: HeroKey = Field(
+        ..., description="Hero key used to identify Overwatch heroes in general"
+    )
+    pickrate: float = Field(..., description="Pickrate (in percent)", ge=0.0, le=100.0)
+    winrate: float = Field(..., description="Winrate (in percent)", ge=0.0, le=100.0)
+
+
+class HeroStatsHistoryPoint(BaseModel):
+    captured_at: datetime = Field(..., description="Snapshot capture timestamp (UTC)")
     hero: HeroKey = Field(
         ..., description="Hero key used to identify Overwatch heroes in general"
     )

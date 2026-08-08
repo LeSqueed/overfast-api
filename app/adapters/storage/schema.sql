@@ -34,3 +34,19 @@ CREATE INDEX IF NOT EXISTS idx_player_profiles_updated_at
 CREATE INDEX IF NOT EXISTS idx_player_profiles_battletag
     ON player_profiles (battletag)
     WHERE battletag IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS hero_stats_snapshots (
+    id          BIGSERIAL        PRIMARY KEY,
+    captured_at TIMESTAMPTZ      NOT NULL,
+    platform    VARCHAR(10)      NOT NULL,
+    gamemode    VARCHAR(20)      NOT NULL,
+    region      VARCHAR(20)      NOT NULL,
+    map         VARCHAR(50)      NOT NULL,
+    tier        VARCHAR(20)      NOT NULL,
+    hero        VARCHAR(50)      NOT NULL,
+    pickrate    DOUBLE PRECISION NOT NULL,
+    winrate     DOUBLE PRECISION NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_hero_stats_snapshots_query
+    ON hero_stats_snapshots (platform, gamemode, region, map, tier, hero, captured_at);

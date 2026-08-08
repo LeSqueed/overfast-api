@@ -20,6 +20,12 @@ def _make_connection(fetchrow_result=None, fetch_result=None):
     conn.execute = AsyncMock(return_value="DELETE 3")
     conn.fetchrow = AsyncMock(return_value=fetchrow_result)
     conn.fetch = AsyncMock(return_value=fetch_result or [])
+
+    @asynccontextmanager
+    async def _transaction():
+        yield
+
+    conn.transaction = _transaction
     return conn
 
 
@@ -382,6 +388,7 @@ class TestGetStats:
         fetchrow_calls = [
             {"n": 5},  # static_data COUNT
             {"n": 10},  # player_profiles COUNT
+            {"n": 20},  # hero_stats_snapshots COUNT
             {"total": 1024000},  # size
         ]
         call_count = {"i": 0}
@@ -404,13 +411,14 @@ class TestGetStats:
         _expected_size = 1024000
         assert result["static_data_count"] == _expected_static
         assert result["player_profiles_count"] == _expected_profiles
+        assert result["hero_stats_snapshots_count"] == 20  # noqa: PLR2004
         assert result["size_bytes"] == _expected_size
         assert result["player_profile_age_p50"] > 0
 
     @pytest.mark.asyncio
     async def test_returns_zeroes_when_no_profiles(self):
         pool, conn = _make_pool()
-        fetchrow_calls = [{"n": 0}, {"n": 0}, {"total": 0}]
+        fetchrow_calls = [{"n": 0}, {"n": 0}, {"n": 0}, {"total": 0}]
         call_count = {"i": 0}
 
         async def fetchrow_side_effect(*_args, **_kwargs):
@@ -455,3 +463,135 @@ class TestInitConnection:
             decoder=json.loads,
             schema="pg_catalog",
         )
+
+
+# ---------------------------------------------------------------------------
+# hero stats snapshots
+# ---------------------------------------------------------------------------
+
+
+class TestStoreHeroStatsSnapshots:
+    @pytest.mark.asyncio
+    async def test_noop_when_rows_empty(self):
+        pool, conn = _make_pool()
+        storage = _make_storage(pool=pool)
+        await storage.store_hero_stats_snapshots(1700000000, [])
+
+        conn.executemany.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_inserts_all_rows(self):
+        pool, conn = _make_pool()
+        storage = _make_storage(pool=pool)
+        rows = [
+            {
+                "platform": "pc",
+                "gamemode": "competitive",
+                "region": "europe",
+                "map": "busan",
+                "tier": "gold",
+                "hero": "ana",
+                "pickrate": 5.5,
+                "winrate": 52.3,
+            },
+            {
+                "platform": "pc",
+                "gamemode": "competitive",
+                "region": "europe",
+                "map": "busan",
+                "tier": "gold",
+                "hero": "mercy",
+                "pickrate": 8.2,
+                "winrate": 49.1,
+            },
+        ]
+
+        await storage.store_hero_stats_snapshots(1700000000, rows)
+
+        conn.executemany.assert_awaited_once()
+        args = conn.executemany.call_args[0]
+        assert len(args[1]) == 2  # noqa: PLR2004
+        first = args[1][0]
+        assert first[1] == "pc"
+        assert first[8] == 52.3  # noqa: PLR2004
+        assert isinstance(first[0], datetime.datetime)
+
+
+class TestGetHeroStatsHistory:
+    @pytest.mark.asyncio
+    async def test_returns_ordered_history(self):
+        captured = datetime.datetime(2025, 6, 1, tzinfo=datetime.UTC)
+        conn = _make_connection(
+            fetch_result=[
+                {
+                    "captured_at": captured,
+                    "hero": "ana",
+                    "pickrate": 5.5,
+                    "winrate": 52.3,
+                },
+                {
+                    "captured_at": captured,
+                    "hero": "ana",
+                    "pickrate": 6.0,
+                    "winrate": 53.0,
+                },
+            ]
+        )
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+        result = await storage.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            map_="busan",
+            tier="gold",
+            hero="ana",
+        )
+
+        assert result[0]["captured_at"] == int(captured.timestamp())
+        assert result[1]["winrate"] == 53.0  # noqa: PLR2004
+        assert result[0]["hero"] == "ana"
+
+    @pytest.mark.asyncio
+    async def test_filters_by_since_until(self):
+        conn = _make_connection(fetch_result=[])
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        await storage.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            map_="busan",
+            tier="gold",
+            hero="ana",
+            since=1700000000,
+            until=1700001000,
+        )
+
+        query = conn.fetch.call_args[0][0]
+        args = list(conn.fetch.call_args[0][1:])
+        assert "captured_at >= TO_TIMESTAMP($7)" in query
+        assert "captured_at <= TO_TIMESTAMP($8)" in query
+        assert args == [
+            "pc",
+            "competitive",
+            "europe",
+            "busan",
+            "gold",
+            "ana",
+            1700000000,
+            1700001000,
+        ]
+
+
+class TestDeleteOldHeroStatsSnapshots:
+    @pytest.mark.asyncio
+    async def test_returns_deleted_count(self):
+        pool, conn = _make_pool()
+        conn.execute = AsyncMock(return_value="DELETE 7")
+        storage = _make_storage(pool=pool)
+        result = await storage.delete_old_hero_stats_snapshots(31536000)
+
+        assert result == 7  # noqa: PLR2004
+        conn.execute.assert_awaited_once()

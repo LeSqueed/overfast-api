@@ -172,6 +172,21 @@ class Settings(BaseSettings):
     hero_stats_cache_timeout: int = 3600
 
     ############
+    # HERO STATS SNAPSHOTS
+    ############
+
+    # Enable the periodic hero stats snapshot cron (historical per-map/per-tier
+    # pickrate & winrate tracking)
+    hero_stats_snapshot_enabled: bool = True
+
+    # Cron expression for the hero stats snapshot task (UTC)
+    hero_stats_snapshot_cron: str = "0 4 * * *"
+
+    # Retention window (seconds) for hero stats snapshots before the cleanup
+    # cron removes them. Set to 0 to disable cleanup.
+    hero_stats_snapshot_max_age: int = 31536000  # 1 year
+
+    ############
     # SWR STALENESS THRESHOLDS
     ############
 
