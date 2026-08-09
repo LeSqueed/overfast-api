@@ -86,15 +86,19 @@ def parse_rates_maps_html(html: str) -> list[dict]:
                 maps.append(
                     {
                         "key": key,
-                        "name": safe_get_attribute(option, "data-title"),
+                        "name": safe_get_attribute(option, "data-title") or key,
                         "gamemode": gamemode,
                     }
                 )
-        return maps
+        if not maps:
+            msg = "No competitive maps found in map filter dropdown"
+            raise ParserParsingError(msg)
 
     except (AttributeError, KeyError, IndexError, TypeError) as error:
         msg = f"Failed to parse maps from rates HTML: {error!r}"
         raise ParserParsingError(msg) from error
+    else:
+        return maps
 
 
 def parse_maps_html(html: str) -> list[dict]:
@@ -132,7 +136,7 @@ def parse_maps_html(html: str) -> list[dict]:
         else:
             entry = {
                 "key": key,
-                "name": scraped["name"] if scraped else key,
+                "name": (scraped["name"] or key) if scraped else key,
                 "screenshot": None,
                 "gamemodes": [scraped["gamemode"]] if scraped else [],
                 "location": None,

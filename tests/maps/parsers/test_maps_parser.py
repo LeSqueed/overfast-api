@@ -1,4 +1,7 @@
+import pytest
+
 from app.domain.enums import MapKey
+from app.domain.exceptions import ParserParsingError
 from app.domain.parsers.maps import (
     parse_maps_csv,
     parse_maps_html,
@@ -48,6 +51,32 @@ def test_parse_rates_maps_html_excludes_all_maps(rates_maps_html_data: str):
     assert "all-maps" not in {m["key"] for m in result}
 
 
+def test_parse_rates_maps_html_missing_dropdown_raises():
+    html = "<html><body><main class='main-content'></main></body></html>"
+
+    with pytest.raises(ParserParsingError):
+        parse_rates_maps_html(html)
+
+
+def test_parse_rates_maps_html_empty_dropdown_raises():
+    html = (
+        "<html><body><main class='main-content'>"
+        "<select id='filter-map-select'></select>"
+        "</main></body></html>"
+    )
+
+    with pytest.raises(ParserParsingError):
+        parse_rates_maps_html(html)
+
+
+def test_parse_rates_maps_html_empty_name_falls_back_to_key(rates_maps_html_data: str):
+    html = rates_maps_html_data.replace('data-title="Busan"', 'data-title=""')
+
+    result = parse_rates_maps_html(html)
+
+    assert {m["key"]: m["name"] for m in result}["busan"] == "busan"
+
+
 def test_parse_maps_html_merges_csv_and_scraped(rates_maps_html_data: str):
     result = parse_maps_html(rates_maps_html_data)
     by_key = {m["key"]: m for m in result}
@@ -83,3 +112,15 @@ def test_parse_maps_html_new_map_falls_back_to_null(rates_maps_html_data: str):
     assert new_map["location"] is None
     assert new_map["country_code"] is None
     assert new_map["screenshot"] is None
+
+
+def test_parse_maps_html_empty_scraped_name_falls_back_to_key(rates_maps_html_data: str):
+    html = rates_maps_html_data.replace(
+        'data-title="Suravasa" value="suravasa"',
+        'data-title="" value="brand-new-map"',
+    )
+
+    result = parse_maps_html(html)
+    by_key = {m["key"]: m for m in result}
+
+    assert by_key["brand-new-map"]["name"] == "brand-new-map"
