@@ -106,6 +106,69 @@ def test_get_player_career_internal_error(client: TestClient):
     assert response.json() == {"error": settings.internal_server_error_message}
 
 
+def test_get_player_career_released_hero_not_in_csv(client: TestClient):
+    hero_comparisons = dict.fromkeys(
+        (
+            "time_played",
+            "games_won",
+            "win_percentage",
+            "weapon_accuracy_best_in_game",
+            "eliminations_per_life",
+            "kill_streak_best",
+            "multikill_best",
+            "eliminations_avg_per_10_min",
+            "deaths_avg_per_10_min",
+            "final_blows_avg_per_10_min",
+            "solo_kills_avg_per_10_min",
+            "objective_kills_avg_per_10_min",
+            "objective_time_avg_per_10_min",
+            "hero_damage_done_avg_per_10_min",
+            "healing_done_avg_per_10_min",
+        )
+    )
+    hero_comparisons["time_played"] = {
+        "label": "Time Played",
+        "values": [{"hero": "brand-new-hero", "value": 120}],
+    }
+
+    with patch(
+        "app.domain.services.player_service.PlayerService.get_player_career",
+        return_value=(
+            {
+                "summary": {
+                    "username": "TeKrop",
+                    "avatar": None,
+                    "namecard": None,
+                    "title": None,
+                    "endorsement": None,
+                    "competitive": None,
+                },
+                "stats": {
+                    "pc": {
+                        "quickplay": {
+                            "heroes_comparisons": hero_comparisons,
+                            "career_stats": {},
+                        },
+                        "competitive": None,
+                    },
+                    "console": None,
+                },
+            },
+            False,
+            0,
+        ),
+    ):
+        response = client.get("/players/TeKrop-2217")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert (
+        response.json()["stats"]["pc"]["quickplay"]["heroes_comparisons"][
+            "time_played"
+        ]["values"][0]["hero"]
+        == "brand-new-hero"
+    )
+
+
 def test_get_player_career_blizzard_forbidden_error(client: TestClient):
     with patch(
         "httpx2.AsyncClient.get",

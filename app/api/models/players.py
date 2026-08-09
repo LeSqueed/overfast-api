@@ -189,7 +189,11 @@ class PlayerEndorsement(BaseModel):
 
 
 class HeroStat(BaseModel):
-    hero: HeroKey = Field(...)
+    hero: str = Field(
+        ...,
+        description="Hero key used to identify Overwatch heroes in general",
+        examples=["ana"],
+    )
     value: StrictInt | StrictFloat = Field(
         ...,
         description=(

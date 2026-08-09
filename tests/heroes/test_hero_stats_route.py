@@ -211,6 +211,28 @@ def test_get_hero_stats_internal_error(client: TestClient):
     assert response.json() == {"error": settings.internal_server_error_message}
 
 
+def test_get_hero_stats_released_hero_not_in_csv(client: TestClient):
+    with patch(
+        "app.domain.services.hero_service.HeroService.get_hero_stats",
+        return_value=(
+            [
+                {
+                    "hero": "brand-new-hero",
+                    "pickrate": 3.3,
+                    "winrate": 48.0,
+                    "banrate": None,
+                }
+            ],
+            False,
+            0,
+        ),
+    ):
+        response = client.get("/heroes/stats", params=_BASE_PARAMS)
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()[0]["hero"] == "brand-new-hero"
+
+
 def test_get_hero_stats_blizzard_forbidden_error(client: TestClient):
     with patch(
         "httpx2.AsyncClient.get",
@@ -300,7 +322,7 @@ def test_get_hero_stats_history_success(client: TestClient):
                 "winrate": 53.1,
             },
         ],
-    ):
+    ) as mock_history:
         response = client.get(
             "/heroes/stats/history",
             params={
@@ -309,11 +331,21 @@ def test_get_hero_stats_history_success(client: TestClient):
                 "region": "europe",
                 "map": "busan",
                 "tier": "all",
-                "hero": "ana",
+                "heroes": ["ana"],
             },
         )
 
     assert response.status_code == status.HTTP_200_OK
+    mock_history.assert_awaited_once_with(
+        platform="pc",
+        gamemode="competitive",
+        region="europe",
+        map_key="busan",
+        tier="all",
+        heroes=["ana"],
+        since=None,
+        until=None,
+    )
     data = response.json()
     assert len(data) == 2  # noqa: PLR2004
     assert set(data[0].keys()) == {
