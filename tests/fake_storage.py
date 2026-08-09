@@ -147,6 +147,25 @@ class FakeStorage:
             for row in matching
         ]
 
+    async def get_hero_stats_history_dates(
+        self,
+        platform: str,
+        gamemode: str,
+        region: str | None = None,
+        map_: str | None = None,
+        tier: str | None = None,
+    ) -> list[int]:
+        dates = {
+            row["captured_at"]
+            for row in self._hero_stats_snapshots
+            if row["platform"] == platform
+            and row["gamemode"] == gamemode
+            and (region is None or row["region"] == region)
+            and (map_ is None or row["map"] == map_)
+            and (tier is None or row["tier"] == tier)
+        }
+        return sorted(dates, reverse=True)
+
     async def delete_old_hero_stats_snapshots(self, max_age_seconds: int) -> int:
         cutoff = time.time() - max_age_seconds
         to_delete = [

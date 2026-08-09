@@ -255,6 +255,82 @@ async def get_hero_stats_history(
 
 
 @router.get(
+    "/stats/dates",
+    responses={
+        **routes_responses,
+        status.HTTP_400_BAD_REQUEST: {
+            "model": BadRequestErrorMessage,
+            "description": "Bad Request Error",
+        },
+    },
+    tags=[RouteTag.HEROES],
+    summary="Get hero stats snapshot dates",
+    description=(
+        "List the distinct snapshot timestamps (Unix seconds) for which hero "
+        "stats data exists, matching the given filters."
+        "<br />`platform` and `gamemode` are required; `region`, `map` and "
+        "`tier` are optional filters."
+        "<br />Dates are ordered most recent first, so the first element is "
+        "the latest available snapshot."
+    ),
+    operation_id="get_hero_stats_history_dates",
+    response_model=list[int],
+)
+async def get_hero_stats_history_dates(
+    response: Response,
+    service: HeroServiceDep,
+    platform: Annotated[
+        PlayerPlatform, Query(title="Player platform filter", examples=["pc"])
+    ],
+    gamemode: Annotated[
+        PlayerGamemode,
+        Query(
+            title="Gamemode",
+            description="Filter on a specific gamemode.",
+            examples=["competitive"],
+        ),
+    ],
+    region: Annotated[
+        PlayerRegion | None,
+        Query(
+            title="Region",
+            description="Optional filter on a specific player region.",
+            examples=["europe"],
+        ),
+    ] = None,
+    map_: Annotated[
+        MapKey | None,
+        Query(alias="map", title="Map key filter", examples=["busan"]),
+    ] = None,
+    tier: Annotated[
+        str | None,
+        Query(
+            title="Competitive tier",
+            description=(
+                "Optional competitive division, or 'all' for the combined "
+                "snapshot. Only tiers present in captured snapshots are returned."
+            ),
+            examples=["gold", "all"],
+        ),
+    ] = None,
+) -> Any:
+    data = await service.get_hero_stats_history_dates(
+        platform=str(platform),
+        gamemode=str(gamemode),
+        region=str(region) if region else None,
+        map_key=str(map_) if map_ else None,
+        tier=tier,
+    )
+    apply_swr_headers(
+        response,
+        settings.hero_stats_cache_timeout,
+        False,
+        0,
+    )
+    return data
+
+
+@router.get(
     "/{hero_key}",
     responses={
         status.HTTP_404_NOT_FOUND: {

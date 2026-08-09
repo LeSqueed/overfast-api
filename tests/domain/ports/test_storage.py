@@ -279,6 +279,46 @@ class TestHeroStatsSnapshots:
         assert {r["hero"] for r in result} == {"ana", "genji"}
 
     @pytest.mark.asyncio
+    async def test_history_dates_returns_distinct_desc(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(1700000003, [{**base}])
+        await storage_db.store_hero_stats_snapshots(1700000001, [{**base}])
+        await storage_db.store_hero_stats_snapshots(1700000002, [{**base}])
+        await storage_db.store_hero_stats_snapshots(
+            1700000002,
+            [{**base, "region": "asia"}],
+        )
+
+        result = await storage_db.get_hero_stats_history_dates(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            map_="busan",
+            tier="all",
+        )
+
+        assert result == [1700000003, 1700000002, 1700000001]
+
+        asia_result = await storage_db.get_hero_stats_history_dates(
+            platform="pc",
+            gamemode="competitive",
+            region="asia",
+            map_="busan",
+            tier="all",
+        )
+
+        assert asia_result == [1700000002]
+
+    @pytest.mark.asyncio
     async def test_history_since_until_filters(self, storage_db):
         base = {
             "platform": "pc",

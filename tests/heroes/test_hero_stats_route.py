@@ -389,3 +389,51 @@ def test_get_hero_stats_history_since_until(client: TestClient):
         since=1700000000,
         until=1700003600,
     )
+
+
+def test_get_hero_stats_history_dates_success(client: TestClient):
+    with patch(
+        "app.domain.services.hero_service.HeroService.get_hero_stats_history_dates",
+        return_value=[1786206744, 1786120344],
+    ) as mock_dates:
+        response = client.get(
+            "/heroes/stats/dates",
+            params={
+                "platform": "pc",
+                "gamemode": "competitive",
+                "region": "europe",
+                "map": "busan",
+                "tier": "all",
+            },
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == [1786206744, 1786120344]
+    mock_dates.assert_awaited_once_with(
+        platform="pc",
+        gamemode="competitive",
+        region="europe",
+        map_key="busan",
+        tier="all",
+    )
+
+
+def test_get_hero_stats_history_dates_minimal_params(client: TestClient):
+    with patch(
+        "app.domain.services.hero_service.HeroService.get_hero_stats_history_dates",
+        return_value=[],
+    ) as mock_dates:
+        response = client.get(
+            "/heroes/stats/dates",
+            params={"platform": "pc", "gamemode": "competitive"},
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == []
+    mock_dates.assert_awaited_once_with(
+        platform="pc",
+        gamemode="competitive",
+        region=None,
+        map_key=None,
+        tier=None,
+    )

@@ -638,6 +638,53 @@ class TestGetHeroStatsHistory:
         assert args == ["pc", "competitive", ["ana", "genji", "reinhardt"]]
 
 
+class TestGetHeroStatsHistoryDates:
+    @pytest.mark.asyncio
+    async def test_returns_distinct_dates_desc(self):
+        captured = datetime.datetime.now(datetime.UTC)
+        conn = _make_connection(
+            fetch_result=[
+                {"captured_at": captured},
+                {"captured_at": captured - datetime.timedelta(seconds=86400)},
+            ]
+        )
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        result = await storage.get_hero_stats_history_dates(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            map_="busan",
+            tier="all",
+        )
+
+        assert result == [
+            int(captured.timestamp()),
+            int((captured - datetime.timedelta(seconds=86400)).timestamp()),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_builds_dynamic_query(self):
+        conn = _make_connection(fetch_result=[])
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        await storage.get_hero_stats_history_dates(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+        )
+
+        query = conn.fetch.call_args[0][0]
+        args = list(conn.fetch.call_args[0][1:])
+        assert "SELECT DISTINCT captured_at" in query
+        assert "ORDER BY captured_at DESC" in query
+        assert "map =" not in query
+        assert "tier =" not in query
+        assert args == ["pc", "competitive", "europe"]
+
+
 class TestDeleteOldHeroStatsSnapshots:
     @pytest.mark.asyncio
     async def test_returns_deleted_count(self):

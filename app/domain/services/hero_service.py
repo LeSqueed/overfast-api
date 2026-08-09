@@ -360,6 +360,34 @@ class HeroService(StaticDataService):
             until=until,
         )
 
+    async def get_hero_stats_history_dates(
+        self,
+        platform: str,
+        gamemode: str,
+        region: str | None = None,
+        map_key: str | None = None,
+        tier: str | None = None,
+    ) -> list[int]:
+        """List distinct snapshot timestamps matching the filters.
+
+        Args:
+            platform: Platform value (e.g. "pc").
+            gamemode: Gamemode value (e.g. "competitive").
+            region: Optional region value (e.g. "europe").
+            map_key: Optional map key (e.g. "busan").
+            tier: Optional competitive division (e.g. "gold") or "all".
+
+        Returns:
+            List of int Unix timestamps, most recent first.
+        """
+        return await self.storage.get_hero_stats_history_dates(
+            platform=platform,
+            gamemode=gamemode,
+            region=region,
+            map_=map_key,
+            tier=tier,
+        )
+
     def _hero_stats_snapshot_grid(self) -> list[tuple]:
         """Build the full snapshot grid: platform x gamemode x region x map x tier.
 

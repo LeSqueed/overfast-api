@@ -361,6 +361,43 @@ class PostgresStorage(metaclass=Singleton):
             for row in rows
         ]
 
+    @track_storage_operation("hero_stats_snapshots", "get")
+    async def get_hero_stats_history_dates(
+        self,
+        platform: str,
+        gamemode: str,
+        region: str | None = None,
+        map_: str | None = None,
+        tier: str | None = None,
+    ) -> list[int]:
+        """List distinct snapshot timestamps matching the given filters.
+
+        Returns list of int Unix timestamps, most recent first.
+        """
+        params: list = [platform, gamemode]
+        conditions = ["platform = $1", "gamemode = $2"]
+        if region is not None:
+            params.append(region)
+            conditions.append(f"region = ${len(params)}")
+        if map_ is not None:
+            params.append(map_)
+            conditions.append(f"map = ${len(params)}")
+        if tier is not None:
+            params.append(tier)
+            conditions.append(f"tier = ${len(params)}")
+
+        where_clause = " AND ".join(conditions)
+        query = (
+            "SELECT DISTINCT captured_at FROM hero_stats_snapshots "  # noqa: S608
+            f"WHERE {where_clause} "
+            "ORDER BY captured_at DESC"
+        )
+
+        async with self._pool.acquire() as conn:  # type: ignore[union-attr]
+            rows = await conn.fetch(query, *params)
+
+        return [int(row["captured_at"].timestamp()) for row in rows]
+
     @track_storage_operation("hero_stats_snapshots", "delete")
     async def delete_old_hero_stats_snapshots(self, max_age_seconds: int) -> int:
         """Delete hero stats snapshots older than max_age_seconds.

@@ -122,6 +122,24 @@ class StoragePort(Protocol):
         """
         ...
 
+    async def get_hero_stats_history_dates(
+        self,
+        platform: str,
+        gamemode: str,
+        region: str | None = None,
+        map_: str | None = None,
+        tier: str | None = None,
+    ) -> list[int]:
+        """List distinct snapshot timestamps matching the given filters.
+
+        ``platform`` and ``gamemode`` are required; ``region``, ``map_`` and
+        ``tier`` are optional filters.
+
+        Returns list of int Unix timestamps, ordered by ``captured_at``
+        descending (most recent first).
+        """
+        ...
+
     async def delete_old_hero_stats_snapshots(self, max_age_seconds: int) -> int:
         """
         Delete hero stats snapshots older than max_age_seconds.
