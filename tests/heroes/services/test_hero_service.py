@@ -367,6 +367,36 @@ class TestHeroServiceSnapshot:
         assert stored_maps != set()
 
     @pytest.mark.asyncio
+    async def test_snapshot_skips_parser_parsing_error(self):
+        svc = _make_hero_service()
+        svc._get_hero_stats_gamemode_filters = AsyncMock(return_value=["1"])
+        expected_stat = {"hero": "ana", "pickrate": 5.5, "winrate": 52.3}
+
+        async def _parse(*_args, **_kwargs):
+            if _kwargs.get("map_filter") == "busan":
+                msg = "unexpected JSON structure"
+                raise ParserParsingError(msg)
+            return [expected_stat]
+
+        with patch(
+            "app.domain.services.hero_service.parse_hero_stats_summary",
+            side_effect=_parse,
+        ):
+            count = await svc.snapshot_hero_stats()
+
+        assert count > 0
+        all_rows = [
+            row
+            for call in cast(
+                "Any", svc.storage
+            ).store_hero_stats_snapshots.await_args_list
+            for row in call.args[1]
+        ]
+        stored_maps = {row["map"] for row in all_rows}
+        assert "busan" not in stored_maps
+        assert stored_maps != set()
+
+    @pytest.mark.asyncio
     async def test_snapshot_no_rows_skips_storage(self):
         svc = _make_hero_service()
         with patch(
@@ -414,6 +444,33 @@ class TestHeroServiceSnapshot:
     async def test_competitive_map_keys_handles_bad_stored_data(self):
         svc = _make_hero_service()
         svc.storage.get_static_data.return_value = {"data": "<not-the-rates-page>"}
+
+        keys = await svc._competitive_map_keys()
+
+        assert keys == [str(m) for m in MapKey]
+
+    @pytest.mark.asyncio
+    async def test_competitive_map_keys_handles_stored_not_a_dict(self):
+        svc = _make_hero_service()
+        svc.storage.get_static_data.return_value = "unexpected-cache-value"
+
+        keys = await svc._competitive_map_keys()
+
+        assert keys == []
+
+    @pytest.mark.asyncio
+    async def test_competitive_map_keys_handles_stored_data_not_a_str(self):
+        svc = _make_hero_service()
+        svc.storage.get_static_data.return_value = {"data": {"not": "a string"}}
+
+        keys = await svc._competitive_map_keys()
+
+        assert keys == []
+
+    @pytest.mark.asyncio
+    async def test_competitive_map_keys_handles_stored_none(self):
+        svc = _make_hero_service()
+        svc.storage.get_static_data.return_value = None
 
         keys = await svc._competitive_map_keys()
 

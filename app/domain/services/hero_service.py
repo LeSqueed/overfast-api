@@ -279,6 +279,7 @@ class HeroService(StaticDataService):
                 InvalidGamemodeFilterError,
                 ParserInternalError,
                 ParserBlizzardError,
+                ParserParsingError,
             ) as exc:
                 logger.warning(
                     "[hero-stats-snapshot] Skipping {}/{}/{}/{}/{}: {}",
@@ -432,6 +433,12 @@ class HeroService(StaticDataService):
         except Exception:  # noqa: BLE001
             stored = None
         if stored is not None:
+            if not isinstance(stored, dict) or not isinstance(stored.get("data"), str):
+                logger.warning(
+                    "[hero-stats-snapshot] Unexpected cached maps value: {!r}",
+                    stored,
+                )
+                return []
             try:
                 maps = parse_rates_maps_html(stored["data"])
                 keys = [map_dict["key"] for map_dict in maps]
