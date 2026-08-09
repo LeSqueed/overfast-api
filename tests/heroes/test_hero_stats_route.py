@@ -54,10 +54,11 @@ def test_get_hero_stats_response_shape(client: TestClient):
 
     first = response.json()[0]
 
-    assert set(first.keys()) == {"hero", "pickrate", "winrate"}
+    assert set(first.keys()) == {"hero", "pickrate", "winrate", "banrate"}
     assert isinstance(first["hero"], str)
     assert isinstance(first["pickrate"], float)
     assert isinstance(first["winrate"], float)
+    assert isinstance(first["banrate"], float)
 
 
 def test_get_hero_stats_invalid_platform(client: TestClient):
@@ -325,6 +326,7 @@ def test_get_hero_stats_history_success(client: TestClient):
         "hero",
         "pickrate",
         "winrate",
+        "banrate",
     }
     assert data[1]["winrate"] == 53.1  # noqa: PLR2004
 

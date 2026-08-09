@@ -93,7 +93,8 @@ class StoragePort(Protocol):
         """Store a batch of hero stats snapshot rows.
 
         ``rows`` are dicts with ``platform``, ``gamemode``, ``region``,
-        ``map``, ``tier``, ``hero``, ``pickrate`` and ``winrate`` keys.
+        ``map``, ``tier``, ``hero``, ``pickrate``, ``winrate`` and optional
+        ``banrate`` keys.
         All rows share the same ``captured_at`` timestamp.
         """
         ...
@@ -118,7 +119,8 @@ class StoragePort(Protocol):
 
         Returns list of dicts with ``captured_at`` (int Unix ts), ``platform``,
         ``gamemode``, ``region``, ``map``, ``tier``, ``hero``, ``pickrate``,
-        ``winrate``, ordered by ``captured_at`` ascending.
+        ``winrate``, and optional ``banrate`` (None when unavailable), ordered
+        by ``captured_at`` ascending.
         """
         ...
 

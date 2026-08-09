@@ -291,7 +291,13 @@ class TestHeroServiceSnapshot:
     @pytest.mark.asyncio
     async def test_snapshot_stores_rows(self):
         svc = _make_hero_service()
-        expected_stat = {"hero": "ana", "pickrate": 5.5, "winrate": 52.3}
+        banrate = 8.0
+        expected_stat = {
+            "hero": "ana",
+            "pickrate": 5.5,
+            "winrate": 52.3,
+            "banrate": banrate,
+        }
 
         with patch(
             "app.domain.services.hero_service.parse_hero_stats_summary",
@@ -310,6 +316,7 @@ class TestHeroServiceSnapshot:
             for row in call.args[1]
         ]
         assert all(row["hero"] == "ana" for row in all_rows)
+        assert all(row["banrate"] == banrate for row in all_rows)
         valid_tiers = {
             "all",
             "bronze",

@@ -514,6 +514,7 @@ class TestStoreHeroStatsSnapshots:
         first = args[1][0]
         assert first[1] == "pc"
         assert first[8] == 52.3  # noqa: PLR2004
+        assert first[9] is None
         assert isinstance(first[0], datetime.datetime)
 
 
@@ -533,6 +534,7 @@ class TestGetHeroStatsHistory:
                     "hero": "ana",
                     "pickrate": 5.5,
                     "winrate": 52.3,
+                    "banrate": 10.0,
                 },
                 {
                     "captured_at": captured,
@@ -544,6 +546,7 @@ class TestGetHeroStatsHistory:
                     "hero": "ana",
                     "pickrate": 6.0,
                     "winrate": 53.0,
+                    "banrate": None,
                 },
             ]
         )
@@ -563,6 +566,8 @@ class TestGetHeroStatsHistory:
         assert result[0]["hero"] == "ana"
         assert result[0]["map"] == "busan"
         assert result[0]["platform"] == "pc"
+        assert result[0]["banrate"] == 10.0  # noqa: PLR2004
+        assert result[1]["banrate"] is None
 
     @pytest.mark.asyncio
     async def test_filters_by_since_until(self):

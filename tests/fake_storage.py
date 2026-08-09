@@ -143,6 +143,7 @@ class FakeStorage:
                 "hero": row["hero"],
                 "pickrate": row["pickrate"],
                 "winrate": row["winrate"],
+                "banrate": row.get("banrate"),
             }
             for row in matching
         ]

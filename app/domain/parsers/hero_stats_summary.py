@@ -127,6 +127,9 @@ def parse_hero_stats_json(
                 "hero": rate["id"],
                 "pickrate": _normalize_rate(rate["cells"]["pickrate"]),
                 "winrate": _normalize_rate(rate["cells"]["winrate"]),
+                "banrate": _normalize_optional_rate(
+                    rate["cells"].get("banrate"),
+                ),
             }
             for rate in hero_stats
         ]
@@ -134,12 +137,13 @@ def parse_hero_stats_json(
         msg = f"Unexpected Blizzard hero stats JSON structure: {error!r}"
         raise ParserParsingError(msg) from error
 
-    # Apply ordering
+    # Apply ordering. Only hero/winrate/pickrate are valid order fields
+    # (validated by the route's order_by pattern), so the key is never None.
     order_field, order_arrangement = order_by.split(":")
     hero_stats.sort(
         key=lambda stat: stat[order_field],
         reverse=(order_arrangement == "desc"),
-    )
+    )  # ty: ignore[no-matching-overload]  (mixed str/float keys)
 
     return hero_stats
 
@@ -151,6 +155,19 @@ def _normalize_rate(rate: float) -> float:
     Blizzard returns -1 when data isn't available, we convert to 0.0
     """
     return rate if rate != -1 else 0.0
+
+
+def _normalize_optional_rate(rate: float | None) -> float | None:
+    """
+    Normalize an optional rate value (convert -1 to None).
+
+    Blizzard returns -1 when data isn't available; the field may also be
+    absent entirely (e.g. when Blizzard removes a metric). None indicates
+    the metric is missing rather than genuinely zero.
+    """
+    if rate is None or rate == -1:
+        return None
+    return float(rate)
 
 
 async def parse_hero_stats_summary(

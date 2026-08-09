@@ -273,8 +273,8 @@ class PostgresStorage(metaclass=Singleton):
             await conn.executemany(
                 """INSERT INTO hero_stats_snapshots
                    (captured_at, platform, gamemode, region, map, tier,
-                    hero, pickrate, winrate)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+                    hero, pickrate, winrate, banrate)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
                 [
                     (
                         captured_at_dt,
@@ -286,6 +286,7 @@ class PostgresStorage(metaclass=Singleton):
                         row["hero"],
                         row["pickrate"],
                         row["winrate"],
+                        row.get("banrate"),
                     )
                     for row in rows
                 ],
@@ -338,7 +339,7 @@ class PostgresStorage(metaclass=Singleton):
         where_clause = " AND ".join(conditions)
         query = (
             "SELECT captured_at, platform, gamemode, region, map, tier, hero, "  # noqa: S608
-            "pickrate, winrate FROM hero_stats_snapshots "
+            "pickrate, winrate, banrate FROM hero_stats_snapshots "
             f"WHERE {where_clause} "
             "ORDER BY captured_at ASC, map ASC, tier ASC, hero ASC"
         )
@@ -357,6 +358,7 @@ class PostgresStorage(metaclass=Singleton):
                 "hero": row["hero"],
                 "pickrate": row["pickrate"],
                 "winrate": row["winrate"],
+                "banrate": row["banrate"],
             }
             for row in rows
         ]

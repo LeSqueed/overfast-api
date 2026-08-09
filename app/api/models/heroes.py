@@ -336,6 +336,15 @@ class HeroStatsSummary(BaseModel):
     )
     pickrate: float = Field(..., description="Pickrate (in percent)", ge=0.0, le=100.0)
     winrate: float = Field(..., description="Winrate (in percent)", ge=0.0, le=100.0)
+    banrate: float | None = Field(
+        None,
+        description=(
+            "Banrate (in percent). Null if Blizzard doesn't provide it "
+            "(e.g. metric removed or unavailable)."
+        ),
+        ge=0.0,
+        le=100.0,
+    )
 
 
 class HeroStatsHistoryPoint(BaseModel):
@@ -350,6 +359,15 @@ class HeroStatsHistoryPoint(BaseModel):
     )
     pickrate: float = Field(..., description="Pickrate (in percent)", ge=0.0, le=100.0)
     winrate: float = Field(..., description="Winrate (in percent)", ge=0.0, le=100.0)
+    banrate: float | None = Field(
+        None,
+        description=(
+            "Banrate (in percent). Null if Blizzard doesn't provide it "
+            "(e.g. metric removed or unavailable)."
+        ),
+        ge=0.0,
+        le=100.0,
+    )
 
 
 class BadRequestErrorMessage(BaseModel):

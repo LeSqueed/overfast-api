@@ -300,6 +300,7 @@ class HeroService(StaticDataService):
                             "hero": stat["hero"],
                             "pickrate": stat["pickrate"],
                             "winrate": stat["winrate"],
+                            "banrate": stat.get("banrate"),
                         }
                     ]
                 )

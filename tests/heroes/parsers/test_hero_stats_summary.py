@@ -1,3 +1,4 @@
+import copy
 from unittest.mock import Mock, patch
 
 import pytest
@@ -130,6 +131,54 @@ def test_parse_hero_stats_json_raises_invalid_gamemode_filter_error():
 
     assert "2" in exc_info.value.message
     assert "1" in exc_info.value.message
+
+
+def test_parse_hero_stats_json_banrate_present(hero_stats_json_data: dict):
+    hero_stats = parse_hero_stats_json(
+        hero_stats_json_data,
+        map_filter="all-maps",
+        gamemode=PlayerGamemode.COMPETITIVE,
+        gamemode_filter="1",
+        order_by="hero:asc",
+    )
+
+    assert len(hero_stats) > 0
+    assert all("banrate" in stat for stat in hero_stats)
+    assert all(stat["banrate"] is not None for stat in hero_stats)
+
+
+def test_parse_hero_stats_json_banrate_missing(hero_stats_json_data: dict):
+    json_data = copy.deepcopy(hero_stats_json_data)
+    for rate in json_data["rates"]["rates"]:
+        rate["cells"].pop("banrate", None)
+
+    hero_stats = parse_hero_stats_json(
+        json_data,
+        map_filter="all-maps",
+        gamemode=PlayerGamemode.COMPETITIVE,
+        gamemode_filter="1",
+        order_by="hero:asc",
+    )
+
+    assert len(hero_stats) > 0
+    assert all(stat["banrate"] is None for stat in hero_stats)
+
+
+def test_parse_hero_stats_json_banrate_negative_one(hero_stats_json_data: dict):
+    json_data = copy.deepcopy(hero_stats_json_data)
+    for rate in json_data["rates"]["rates"]:
+        rate["cells"]["banrate"] = -1
+
+    hero_stats = parse_hero_stats_json(
+        json_data,
+        map_filter="all-maps",
+        gamemode=PlayerGamemode.COMPETITIVE,
+        gamemode_filter="1",
+        order_by="hero:asc",
+    )
+
+    assert len(hero_stats) > 0
+    assert all(stat["banrate"] is None for stat in hero_stats)
 
 
 @pytest.mark.parametrize(

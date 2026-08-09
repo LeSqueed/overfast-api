@@ -45,8 +45,12 @@ CREATE TABLE IF NOT EXISTS hero_stats_snapshots (
     tier        VARCHAR(20)      NOT NULL,
     hero        VARCHAR(50)      NOT NULL,
     pickrate    DOUBLE PRECISION NOT NULL,
-    winrate     DOUBLE PRECISION NOT NULL
+    winrate     DOUBLE PRECISION NOT NULL,
+    banrate     DOUBLE PRECISION
 );
+
+-- Migrations for existing databases (idempotent).
+ALTER TABLE hero_stats_snapshots ADD COLUMN IF NOT EXISTS banrate DOUBLE PRECISION;
 
 CREATE INDEX IF NOT EXISTS idx_hero_stats_snapshots_query
     ON hero_stats_snapshots (platform, gamemode, region, map, tier, hero, captured_at);
