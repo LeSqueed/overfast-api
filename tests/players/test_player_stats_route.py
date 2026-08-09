@@ -67,7 +67,7 @@ def test_get_player_stats_invalid_hero(client: TestClient, uri: str):
         },
     )
 
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.status_code == status.HTTP_200_OK
 
 
 @pytest.mark.parametrize("player_html_data", ["TeKrop-2217"], indirect=True)

@@ -24,9 +24,7 @@ from app.config import settings
 from app.domain.enums import (
     CompetitiveDivisionFilter,
     HeroGamemode,
-    HeroKey,
     Locale,
-    MapKey,
     PlayerGamemode,
     PlayerPlatform,
     PlayerRegion,
@@ -118,7 +116,7 @@ async def get_hero_stats(
         Role | None, Query(title="Role filter", examples=["support"])
     ] = None,
     map_: Annotated[
-        MapKey | None, Query(alias="map", title="Map key filter", examples=["hanaoka"])
+        str | None, Query(alias="map", title="Map key filter", examples=["hanaoka"])
     ] = None,
     competitive_division: Annotated[
         CompetitiveDivisionFilter | None,
@@ -204,7 +202,7 @@ async def get_hero_stats_history(
         ),
     ] = None,
     map_: Annotated[
-        MapKey | None,
+        str | None,
         Query(alias="map", title="Map key filter", examples=["busan"]),
     ] = None,
     tier: Annotated[
@@ -219,7 +217,7 @@ async def get_hero_stats_history(
         ),
     ] = None,
     heroes: Annotated[
-        list[HeroKey] | None,
+        list[str] | None,
         Query(
             title="Hero key filter",
             description="One or more hero keys (repeated query parameter).",
@@ -241,7 +239,7 @@ async def get_hero_stats_history(
         region=str(region) if region else None,
         map_key=str(map_) if map_ else None,
         tier=tier,
-        heroes=[str(hero) for hero in heroes] if heroes else None,
+        heroes=heroes,
         since=since,
         until=until,
     )
@@ -299,7 +297,7 @@ async def get_hero_stats_history_dates(
         ),
     ] = None,
     map_: Annotated[
-        MapKey | None,
+        str | None,
         Query(alias="map", title="Map key filter", examples=["busan"]),
     ] = None,
     tier: Annotated[
@@ -352,7 +350,7 @@ async def get_hero(
     request: Request,
     response: Response,
     service: HeroServiceDep,
-    hero_key: Annotated[HeroKey, Path(title="Key name of the hero")],
+    hero_key: Annotated[str, Path(title="Key name of the hero")],
     locale: Annotated[
         Locale, Query(title="Locale to be displayed")
     ] = Locale.ENGLISH_US,

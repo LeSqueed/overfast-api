@@ -391,6 +391,65 @@ def test_get_hero_stats_history_since_until(client: TestClient):
     )
 
 
+def test_get_hero_stats_history_unknown_hero_and_map(client: TestClient):
+    with patch(
+        "app.domain.services.hero_service.HeroService.get_hero_stats_history",
+        return_value=[],
+    ) as mock_history:
+        response = client.get(
+            "/heroes/stats/history",
+            params={
+                "platform": "pc",
+                "gamemode": "competitive",
+                "map": "not-a-real-map",
+                "heroes": ["not-a-real-hero"],
+            },
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == []
+    mock_history.assert_awaited_once_with(
+        platform="pc",
+        gamemode="competitive",
+        region=None,
+        map_key="not-a-real-map",
+        tier=None,
+        heroes=["not-a-real-hero"],
+        since=None,
+        until=None,
+    )
+
+
+def test_get_hero_stats_history_released_hero_not_in_csv(client: TestClient):
+    with patch(
+        "app.domain.services.hero_service.HeroService.get_hero_stats_history",
+        return_value=[
+            {
+                "captured_at": 1700000000,
+                "platform": "pc",
+                "gamemode": "competitive",
+                "region": "europe",
+                "map": "busan",
+                "tier": "all",
+                "hero": "brand-new-hero",
+                "pickrate": 3.3,
+                "winrate": 48.0,
+            }
+        ],
+    ):
+        response = client.get(
+            "/heroes/stats/history",
+            params={
+                "platform": "pc",
+                "gamemode": "competitive",
+                "heroes": ["brand-new-hero"],
+            },
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()[0]["hero"] == "brand-new-hero"
+
+
 def test_get_hero_stats_history_dates_success(client: TestClient):
     with patch(
         "app.domain.services.hero_service.HeroService.get_hero_stats_history_dates",

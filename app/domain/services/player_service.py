@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 from app.config import settings
-from app.domain.enums import HeroKeyCareerFilter, PlayerGamemode, PlayerPlatform
+from app.domain.enums import PlayerGamemode, PlayerPlatform
 from app.domain.exceptions import (
     ParserBlizzardError,
     ParserInternalError,
@@ -176,7 +176,7 @@ class PlayerService(BaseService):
         player_id: str,
         gamemode: PlayerGamemode,
         platform: PlayerPlatform | None,
-        hero: HeroKeyCareerFilter | None,
+        hero: str | None,
         cache_key: str,
     ) -> tuple[dict, bool, int]:
         """Return player stats with category labels."""
@@ -218,7 +218,7 @@ class PlayerService(BaseService):
         player_id: str,
         gamemode: PlayerGamemode,
         platform: PlayerPlatform | None,
-        hero: HeroKeyCareerFilter | None,
+        hero: str | None,
         cache_key: str,
     ) -> tuple[dict, bool, int]:
         """Return player career stats (no labels)."""

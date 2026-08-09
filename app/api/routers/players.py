@@ -23,7 +23,6 @@ from app.api.models.players import (
 )
 from app.config import settings
 from app.domain.enums import (
-    HeroKeyCareerFilter,
     PlayerGamemode,
     PlayerPlatform,
 )
@@ -73,7 +72,7 @@ async def get_player_career_common_parameters(
         ),
         examples=["pc"],
     ),
-    hero: HeroKeyCareerFilter = Query(
+    hero: str = Query(
         None,
         title="Hero key",
         description=(

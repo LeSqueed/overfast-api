@@ -194,7 +194,7 @@ class HeroService(StaticDataService):
         gamemode: PlayerGamemode,
         region: PlayerRegion,
         role: Role | None,
-        map_filter: MapKey | None,
+        map_filter: str | None,
         competitive_division: CompetitiveDivisionFilter | None,
         order_by: str,
         cache_key: str,
@@ -490,7 +490,7 @@ class HeroService(StaticDataService):
         gamemode_filter: str,
         region: PlayerRegion,
         role: Role | None,
-        map_filter: MapKey | None,
+        map_filter: str | None,
         competitive_division: CompetitiveDivisionFilter | None,
         order_by: str,
     ) -> list[dict]:

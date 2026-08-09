@@ -112,3 +112,29 @@ def test_get_heroes_parser_parsing_error(client: TestClient):
 
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
     assert response.json() == {"error": settings.internal_server_error_message}
+
+
+def test_get_heroes_released_hero_not_in_csv(client: TestClient):
+    with patch(
+        "app.domain.services.hero_service.HeroService.list_heroes",
+        return_value=(
+            [
+                {
+                    "key": "brand-new-hero",
+                    "name": "Brand New Hero",
+                    "portrait": "https://example.com/brand-new-hero.png",
+                    "role": "damage",
+                    "subrole": "some-new-subrole",
+                    "gamemodes": ["quickplay"],
+                }
+            ],
+            False,
+            0,
+        ),
+    ):
+        response = client.get("/heroes")
+
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert data[0]["key"] == "brand-new-hero"
+    assert data[0]["subrole"] == "some-new-subrole"

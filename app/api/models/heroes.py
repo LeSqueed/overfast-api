@@ -7,10 +7,8 @@ from pydantic import BaseModel, Field, HttpUrl
 from app.domain.enums import (
     BackgroundImageSize,
     HeroGamemode,
-    HeroKey,
     MediaType,
     Role,
-    SubRole,
 )
 
 
@@ -247,7 +245,7 @@ class Hero(BaseModel):
         description="Role of the hero",
         examples=["damage"],
     )
-    subrole: SubRole = Field(
+    subrole: str = Field(
         ...,
         description="Sub-Role of the hero",
         examples=["sharpshooter"],
@@ -293,7 +291,7 @@ class Hero(BaseModel):
 
 
 class HeroShort(BaseModel):
-    key: HeroKey = Field(
+    key: str = Field(
         ...,
         description="Key name of the hero",
         examples=["ana"],
@@ -311,7 +309,7 @@ class HeroShort(BaseModel):
         description="Role of the hero",
         examples=["support"],
     )
-    subrole: SubRole = Field(
+    subrole: str = Field(
         ...,
         description="Sub-Role of the hero",
         examples=["tactician"],
@@ -333,7 +331,7 @@ class HeroParserErrorMessage(BaseModel):
 
 
 class HeroStatsSummary(BaseModel):
-    hero: HeroKey = Field(
+    hero: str = Field(
         ..., description="Hero key used to identify Overwatch heroes in general"
     )
     pickrate: float = Field(..., description="Pickrate (in percent)", ge=0.0, le=100.0)
@@ -347,7 +345,7 @@ class HeroStatsHistoryPoint(BaseModel):
     region: str = Field(..., description="Player region (e.g. europe)")
     map: str = Field(..., description="Map key (e.g. busan)")
     tier: str = Field(..., description="Competitive tier (e.g. gold, or 'all')")
-    hero: HeroKey = Field(
+    hero: str = Field(
         ..., description="Hero key used to identify Overwatch heroes in general"
     )
     pickrate: float = Field(..., description="Pickrate (in percent)", ge=0.0, le=100.0)
