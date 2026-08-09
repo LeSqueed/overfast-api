@@ -1,7 +1,7 @@
 """Map domain service — maps list"""
 
 from app.config import settings
-from app.domain.parsers.maps import parse_maps_csv
+from app.domain.parsers.maps import fetch_rates_html, parse_maps_html
 from app.domain.services.static_data_service import StaticDataService, StaticFetchConfig
 
 
@@ -11,10 +11,17 @@ class MapService(StaticDataService):
     def _maps_config(
         self, cache_key: str, gamemode: str | None = None
     ) -> StaticFetchConfig:
-        """Build a StaticFetchConfig for the maps list."""
+        """Build a StaticFetchConfig for the maps list.
 
-        def _fetch() -> list[dict]:
-            return parse_maps_csv()
+        The maps list is scraped from the Blizzard hero stats page (the map
+        dropdown is the authoritative competitive map list), enriched with CSV
+        metadata (screenshot, location, country_code) and flagged with a
+        ``competitive`` boolean. The raw HTML is persisted so code changes to
+        the parser take effect on the next request after restart.
+        """
+
+        async def _fetch() -> str:
+            return await fetch_rates_html(self.blizzard_client)
 
         def _filter(data: list[dict]) -> list[dict]:
             if not gamemode:
@@ -23,8 +30,9 @@ class MapService(StaticDataService):
             return [m for m in data if gamemode_val in m.get("gamemodes", [])]
 
         return StaticFetchConfig(
-            storage_key="maps:all",
+            storage_key="maps:rates",
             fetcher=_fetch,
+            parser=parse_maps_html,
             result_filter=_filter if gamemode else None,
             cache_key=cache_key,
             cache_ttl=settings.csv_cache_timeout,

@@ -28,6 +28,7 @@ from app.domain.parsers.heroes import (
     parse_heroes_html,
 )
 from app.domain.parsers.heroes_hitpoints import parse_heroes_hitpoints
+from app.domain.parsers.maps import parse_rates_maps_html
 from app.domain.services.static_data_service import StaticDataService, StaticFetchConfig
 from app.infrastructure.logger import logger
 
@@ -257,13 +258,14 @@ class HeroService(StaticDataService):
         total_stored = 0
         rows: list[dict] = []
         current_map_key: str | None = None
+        map_keys = await self._competitive_map_keys()
         for (
             platform,
             gamemode,
             region,
             map_key,
             tier,
-        ) in self._hero_stats_snapshot_grid():
+        ) in self._hero_stats_snapshot_grid(map_keys):
             if current_map_key is not None and map_key != current_map_key:
                 total_stored += await self._flush_hero_stats_snapshot(captured_at, rows)
                 rows = []
@@ -389,17 +391,21 @@ class HeroService(StaticDataService):
             tier=tier,
         )
 
-    def _hero_stats_snapshot_grid(self) -> list[tuple]:
+    def _hero_stats_snapshot_grid(self, map_keys: list[str]) -> list[tuple]:
         """Build the full snapshot grid: platform x gamemode x region x map x tier.
 
         Only competitive gamemode is tracked per product decision. Tiers include
         "all" plus every CompetitiveDivisionFilter value.
+
+        Args:
+            map_keys: Competitive map keys to snapshot (from the scraped maps
+                list, or the CSV MapKey enum as a fallback).
         """
         tiers = ["all", *[tier.value for tier in CompetitiveDivisionFilter]]
         grid: list[tuple] = []
         for platform in PlayerPlatform:
             for region in PlayerRegion:
-                for map_key in MapKey:
+                for map_key in map_keys:
                     for tier in tiers:
                         grid.extend(
                             [
@@ -407,12 +413,36 @@ class HeroService(StaticDataService):
                                     platform,
                                     PlayerGamemode.COMPETITIVE,
                                     region,
-                                    map_key.value,
+                                    map_key,
                                     tier,
                                 )
                             ]
                         )
         return grid
+
+    async def _competitive_map_keys(self) -> list[str]:
+        """Return the competitive map keys to snapshot.
+
+        Prefers the scraped competitive map list stored by MapService
+        (``maps:rates``), falling back to the CSV ``MapKey`` enum so new maps
+        are captured automatically on release even before the CSV is updated.
+        """
+        try:
+            stored = await self.storage.get_static_data("maps:rates")
+        except Exception:  # noqa: BLE001
+            stored = None
+        if stored is not None:
+            try:
+                maps = parse_rates_maps_html(stored["data"])
+                keys = [map_dict["key"] for map_dict in maps]
+                if keys:
+                    return keys
+            except ParserParsingError as exc:
+                logger.warning(
+                    "[hero-stats-snapshot] Failed to parse competitive maps: {}",
+                    exc,
+                )
+        return [map_key.value for map_key in MapKey]
 
     async def _fetch_hero_stats_for_snapshot(
         self,

@@ -3,7 +3,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.domain.enums import Locale, PlayerGamemode, PlayerPlatform, PlayerRegion
+from app.domain.enums import (
+    Locale,
+    MapKey,
+    PlayerGamemode,
+    PlayerPlatform,
+    PlayerRegion,
+)
 from app.domain.exceptions import (
     InvalidGamemodeFilterError,
     ParserBlizzardError,
@@ -11,11 +17,13 @@ from app.domain.exceptions import (
     ParserParsingError,
 )
 from app.domain.services.hero_service import HeroService, dict_insert_value_before_key
+from tests.helpers import read_html_file
 
 
 def _make_hero_service() -> HeroService:
     cache = AsyncMock()
     storage = AsyncMock()
+    storage.get_static_data.return_value = None
     blizzard_client = AsyncMock()
     task_queue = AsyncMock()
     task_queue.is_job_pending_or_running.return_value = False
@@ -374,11 +382,42 @@ class TestHeroServiceSnapshot:
 
     def test_snapshot_grid_uses_competitive_only(self):
         svc = _make_hero_service()
-        grid = svc._hero_stats_snapshot_grid()
+        grid = svc._hero_stats_snapshot_grid(map_keys=["busan", "dorado"])
 
         assert len(grid) > 0
         assert all(entry[1] == PlayerGamemode.COMPETITIVE for entry in grid)
+        assert {entry[3] for entry in grid} == {"busan", "dorado"}
         assert {entry[4] for entry in grid} >= {"all", "gold"}
+
+    @pytest.mark.asyncio
+    async def test_competitive_map_keys_falls_back_to_csv_enum(self):
+        svc = _make_hero_service()
+
+        keys = await svc._competitive_map_keys()
+
+        assert keys == [str(m) for m in MapKey]
+
+    @pytest.mark.asyncio
+    async def test_competitive_map_keys_uses_scraped_list(self):
+        svc = _make_hero_service()
+        rates_maps_html = read_html_file("rates_map_dropdown.html")
+        assert rates_maps_html is not None
+        svc.storage.get_static_data.return_value = {"data": rates_maps_html}
+
+        keys = await svc._competitive_map_keys()
+
+        assert "busan" in keys
+        assert "anubis" not in keys
+        assert "all-maps" not in keys
+
+    @pytest.mark.asyncio
+    async def test_competitive_map_keys_handles_bad_stored_data(self):
+        svc = _make_hero_service()
+        svc.storage.get_static_data.return_value = {"data": "<not-the-rates-page>"}
+
+        keys = await svc._competitive_map_keys()
+
+        assert keys == [str(m) for m in MapKey]
 
 
 class TestHeroServiceHistory:

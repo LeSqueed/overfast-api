@@ -20,9 +20,21 @@ def test_get_maps(client: TestClient):
 
     for map_data in maps:
         screenshot_url = map_data["screenshot"]
-        screenshot_path = screenshot_url.removeprefix(f"{settings.app_base_url}/")
-        path = Path(screenshot_path)
-        assert path.is_file(), f"Screenshot file does not exist: {path}"
+        if screenshot_url is not None:
+            screenshot_path = screenshot_url.removeprefix(f"{settings.app_base_url}/")
+            path = Path(screenshot_path)
+            assert path.is_file(), f"Screenshot file does not exist: {path}"
+
+
+def test_get_maps_has_competitive_flag(client: TestClient):
+    response = client.get("/maps")
+    assert response.status_code == status.HTTP_200_OK
+
+    maps = response.json()
+    assert len(maps) > 0
+    assert all("competitive" in map_data for map_data in maps)
+    assert any(map_data["competitive"] for map_data in maps)
+    assert not all(map_data["competitive"] for map_data in maps)
 
 
 @pytest.mark.parametrize("gamemode", list(MapGamemode))

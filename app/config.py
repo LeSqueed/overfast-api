@@ -254,6 +254,10 @@ class Settings(BaseSettings):
     # Route for retrieving usage statistics about Overwatch heroes
     hero_stats_path: str = "/en-us/rates/data/"
 
+    # Route for the hero stats page (hosts the map filter dropdown used to
+    # determine which maps are competitive)
+    rates_path: str = "/en-us/rates/"
+
     ############
     # CRITICAL ERROR DISCORD WEBHOOK
     ############
