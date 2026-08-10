@@ -180,7 +180,7 @@ class Settings(BaseSettings):
     hero_stats_snapshot_enabled: bool = True
 
     # Cron expression for the hero stats snapshot task (UTC)
-    hero_stats_snapshot_cron: str = "0 4 * * *"
+    hero_stats_snapshot_cron: str = "0 11 * * *"
 
     # Retention window (seconds) for hero stats snapshots before the cleanup
     # cron removes them. Set to 0 to disable cleanup.
