@@ -47,6 +47,15 @@ def _make_pool(conn=None):
     return pool, conn
 
 
+# An exact UTC-day boundary, so it is its own snapshot slot.
+_SNAPSHOT_SLOT = 1700006400
+
+
+def _normalized(query: str) -> str:
+    """Collapse a SQL string's whitespace so assertions ignore indentation."""
+    return " ".join(query.split())
+
+
 def _make_storage(pool=None) -> PostgresStorage:
     """Create a PostgresStorage with an injected mock pool."""
     storage = PostgresStorage()
@@ -374,8 +383,11 @@ class TestClearAllData:
         await storage.clear_all_data()
 
         conn.execute.assert_awaited_once()
-        sql = conn.execute.call_args[0][0]
-        assert "TRUNCATE" in sql
+        sql = _normalized(conn.execute.call_args[0][0])
+        assert sql == (
+            "TRUNCATE static_data, player_profiles, hero_stats_snapshots, "
+            "hero_stats_snapshot_runs"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +461,7 @@ class TestGetStats:
         size_call_params = conn.fetchrow.call_args[0][1]
 
         assert sorted(size_call_params) == [
+            "hero_stats_snapshot_runs",
             "hero_stats_snapshots",
             "player_profiles",
             "static_data",
@@ -536,6 +549,96 @@ class TestStoreHeroStatsSnapshots:
         assert first[8] == 52.3  # noqa: PLR2004
         assert first[9] is None
         assert isinstance(first[0], datetime.datetime)
+
+    @pytest.mark.asyncio
+    async def test_upserts_on_the_grid_cell_key(self):
+        """A resumed run must refresh its own rows, not duplicate the grid."""
+        pool, conn = _make_pool()
+        storage = _make_storage(pool=pool)
+        rows = [
+            {
+                "platform": "pc",
+                "gamemode": "competitive",
+                "region": "europe",
+                "map": "busan",
+                "tier": "gold",
+                "hero": "ana",
+                "pickrate": 5.5,
+                "winrate": 52.3,
+            }
+        ]
+
+        await storage.store_hero_stats_snapshots(1700000000, rows)
+
+        query = _normalized(conn.executemany.call_args[0][0])
+        assert (
+            "ON CONFLICT (platform, gamemode, region, map, tier, hero, captured_at) "
+            "DO UPDATE SET pickrate = EXCLUDED.pickrate, "
+            "winrate = EXCLUDED.winrate, banrate = EXCLUDED.banrate" in query
+        )
+
+
+class TestClaimHeroStatsSnapshotRun:
+    @pytest.mark.asyncio
+    async def test_returns_true_when_the_slot_was_taken(self):
+        conn = _make_connection(fetchrow_result={"captured_at": None})
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        claimed = await storage.claim_hero_stats_snapshot_run(_SNAPSHOT_SLOT, 21600)
+
+        assert claimed is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_the_slot_is_held(self):
+        conn = _make_connection(fetchrow_result=None)
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        claimed = await storage.claim_hero_stats_snapshot_run(_SNAPSHOT_SLOT, 21600)
+
+        assert claimed is False
+
+    @pytest.mark.asyncio
+    async def test_claims_in_a_single_conditional_upsert(self):
+        conn = _make_connection(fetchrow_result={"captured_at": None})
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        await storage.claim_hero_stats_snapshot_run(_SNAPSHOT_SLOT, 21600)
+
+        query, captured_at, lease = conn.fetchrow.call_args[0]
+        normalized = _normalized(query)
+        assert "INSERT INTO hero_stats_snapshot_runs" in normalized
+        assert "ON CONFLICT (captured_at) DO UPDATE" in normalized
+        assert (
+            "WHERE hero_stats_snapshot_runs.completed_at IS NULL "
+            "AND hero_stats_snapshot_runs.started_at "
+            "< NOW() - MAKE_INTERVAL(secs => $2::float8)" in normalized
+        )
+        assert "RETURNING captured_at" in normalized
+        assert captured_at.timestamp() == _SNAPSHOT_SLOT
+        assert captured_at.tzinfo is datetime.UTC
+        assert lease == 21600.0  # noqa: PLR2004
+
+
+class TestCompleteHeroStatsSnapshotRun:
+    @pytest.mark.asyncio
+    async def test_records_completion_with_counts(self):
+        pool, conn = _make_pool()
+        storage = _make_storage(pool=pool)
+
+        await storage.complete_hero_stats_snapshot_run(_SNAPSHOT_SLOT, 1500, 3)
+
+        query, captured_at, row_count, skipped_count = conn.execute.call_args[0]
+        normalized = _normalized(query)
+        assert (
+            "UPDATE hero_stats_snapshot_runs SET completed_at = NOW(), "
+            "row_count = $2, skipped_count = $3 WHERE captured_at = $1" in normalized
+        )
+        assert captured_at.timestamp() == _SNAPSHOT_SLOT
+        assert row_count == 1500  # noqa: PLR2004
+        assert skipped_count == 3  # noqa: PLR2004
 
 
 class TestGetHeroStatsHistory:
@@ -766,6 +869,25 @@ class TestGetHeroStatsHistoryDates:
         assert "map =" not in query
         assert "tier =" not in query
         assert args == ["pc", "competitive", "europe"]
+
+    @pytest.mark.asyncio
+    async def test_hides_slots_whose_run_never_completed(self):
+        """Unfinished runs are anti-joined out; slots with no run row stay."""
+        conn = _make_connection(fetch_result=[])
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        await storage.get_hero_stats_history_dates(
+            platform="pc",
+            gamemode="competitive",
+        )
+
+        query = _normalized(conn.fetch.call_args[0][0])
+        assert "FROM hero_stats_snapshots s" in query
+        assert (
+            "AND NOT EXISTS (SELECT 1 FROM hero_stats_snapshot_runs r "
+            "WHERE r.captured_at = s.captured_at AND r.completed_at IS NULL)" in query
+        )
 
 
 class TestDeleteOldHeroStatsSnapshots:

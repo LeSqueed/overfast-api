@@ -25,6 +25,7 @@ class FakeStorage:
         self._profiles: dict[str, dict] = {}
         self._battletag_index: dict[str, str] = {}
         self._hero_stats_snapshots: list[dict] = []
+        self._hero_stats_snapshot_runs: dict[int, dict] = {}
 
     async def initialize(self) -> None:
         pass
@@ -104,11 +105,61 @@ class FakeStorage:
     # Hero stats snapshots
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _snapshot_key(row: dict) -> tuple:
+        """Grid-cell identity of a snapshot row — the adapter's unique index."""
+        return (
+            row["platform"],
+            row["gamemode"],
+            row["region"],
+            row["map"],
+            row["tier"],
+            row["hero"],
+            row["captured_at"],
+        )
+
     async def store_hero_stats_snapshots(
         self, captured_at: int, rows: list[dict]
     ) -> None:
+        """Upsert rows, mirroring the adapter's ON CONFLICT DO UPDATE."""
+        by_key = {self._snapshot_key(row): row for row in self._hero_stats_snapshots}
         for row in rows:
-            self._hero_stats_snapshots.append({**row, "captured_at": captured_at})
+            new_row = {**row, "captured_at": captured_at}
+            existing = by_key.get(self._snapshot_key(new_row))
+            if existing is None:
+                self._hero_stats_snapshots.append(new_row)
+                by_key[self._snapshot_key(new_row)] = new_row
+            else:
+                existing.update(new_row)
+
+    async def claim_hero_stats_snapshot_run(
+        self, captured_at: int, lease_seconds: int
+    ) -> bool:
+        run = self._hero_stats_snapshot_runs.get(captured_at)
+        if run is not None and (
+            run["completed_at"] is not None
+            or run["started_at"] > time.time() - lease_seconds
+        ):
+            return False
+        self._hero_stats_snapshot_runs[captured_at] = {
+            "started_at": time.time(),
+            "completed_at": None,
+            "row_count": 0,
+            "skipped_count": 0,
+        }
+        return True
+
+    async def complete_hero_stats_snapshot_run(
+        self, captured_at: int, row_count: int, skipped_count: int
+    ) -> None:
+        run = self._hero_stats_snapshot_runs.get(captured_at)
+        if run is None:
+            return
+        run.update(
+            completed_at=time.time(),
+            row_count=row_count,
+            skipped_count=skipped_count,
+        )
 
     async def get_hero_stats_history(
         self,
@@ -175,7 +226,14 @@ class FakeStorage:
             and (map_ is None or row["map"] == map_)
             and (tier is None or row["tier"] == tier)
         }
-        return sorted(dates, reverse=True)
+        return sorted(
+            (date for date in dates if not self._run_unfinished(date)), reverse=True
+        )
+
+    def _run_unfinished(self, captured_at: int) -> bool:
+        """Whether a run was claimed for ``captured_at`` but never completed."""
+        run = self._hero_stats_snapshot_runs.get(captured_at)
+        return run is not None and run["completed_at"] is None
 
     async def delete_old_hero_stats_snapshots(self, max_age_seconds: int) -> int:
         cutoff = time.time() - max_age_seconds
@@ -207,6 +265,7 @@ class FakeStorage:
         self._profiles.clear()
         self._battletag_index.clear()
         self._hero_stats_snapshots.clear()
+        self._hero_stats_snapshot_runs.clear()
 
     # ------------------------------------------------------------------ #
     # Statistics

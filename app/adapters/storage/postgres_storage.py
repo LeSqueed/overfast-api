@@ -27,7 +27,12 @@ if TYPE_CHECKING:
 _SCHEMA_SQL = (Path(__file__).parent / "schema.sql").read_text()
 
 # Tables whose on-disk footprint is reported by ``get_stats``.
-_SIZED_TABLES = ["player_profiles", "static_data", "hero_stats_snapshots"]
+_SIZED_TABLES = [
+    "player_profiles",
+    "static_data",
+    "hero_stats_snapshots",
+    "hero_stats_snapshot_runs",
+]
 
 type _QueryParam = str | int | list[str]
 
@@ -261,11 +266,20 @@ class PostgresStorage(metaclass=Singleton):
     # Hero stats snapshots
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _to_utc(timestamp: int) -> datetime.datetime:
+        """Convert a Unix timestamp to a timezone-aware UTC datetime."""
+        return datetime.datetime.fromtimestamp(timestamp, tz=datetime.UTC)
+
     @track_storage_operation("hero_stats_snapshots", "set")
     async def store_hero_stats_snapshots(
         self, captured_at: int, rows: list[dict]
     ) -> None:
         """Store a batch of hero stats snapshot rows in a single transaction.
+
+        Re-storing a (platform, gamemode, region, map, tier, hero, captured_at)
+        combination overwrites the previous values — a repeated or resumed run
+        refreshes its own rows instead of duplicating the grid.
 
         Args:
             captured_at: Unix timestamp shared by every row.
@@ -274,13 +288,18 @@ class PostgresStorage(metaclass=Singleton):
         """
         if not rows:
             return
-        captured_at_dt = datetime.datetime.fromtimestamp(captured_at, tz=datetime.UTC)
+        captured_at_dt = self._to_utc(captured_at)
         async with self._pool.acquire() as conn, conn.transaction():  # type: ignore[union-attr]
             await conn.executemany(
                 """INSERT INTO hero_stats_snapshots
                    (captured_at, platform, gamemode, region, map, tier,
                     hero, pickrate, winrate, banrate)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                   ON CONFLICT (platform, gamemode, region, map, tier, hero,
+                                captured_at)
+                   DO UPDATE SET pickrate = EXCLUDED.pickrate,
+                                 winrate = EXCLUDED.winrate,
+                                 banrate = EXCLUDED.banrate""",
                 [
                     (
                         captured_at_dt,
@@ -296,6 +315,57 @@ class PostgresStorage(metaclass=Singleton):
                     )
                     for row in rows
                 ],
+            )
+
+    @track_storage_operation("hero_stats_snapshot_runs", "set")
+    async def claim_hero_stats_snapshot_run(
+        self, captured_at: int, lease_seconds: int
+    ) -> bool:
+        """Atomically claim the snapshot run slot ``captured_at``.
+
+        The claim succeeds when the slot is free, or when an unfinished run was
+        started more than ``lease_seconds`` ago — that run's worker is gone and
+        the snapshot may be resumed under the same timestamp. A single
+        INSERT ... ON CONFLICT DO UPDATE ... RETURNING does the whole
+        check-and-take, so two workers racing on the same slot cannot both win.
+
+        Returns:
+            True when the caller owns the run, False when it must stand down.
+        """
+        async with self._pool.acquire() as conn:  # type: ignore[union-attr]
+            row = await conn.fetchrow(
+                """INSERT INTO hero_stats_snapshot_runs (captured_at, started_at)
+                   VALUES ($1, NOW())
+                   ON CONFLICT (captured_at) DO UPDATE
+                       SET started_at = NOW()
+                       WHERE hero_stats_snapshot_runs.completed_at IS NULL
+                         AND hero_stats_snapshot_runs.started_at
+                             < NOW() - MAKE_INTERVAL(secs => $2::float8)
+                   RETURNING captured_at""",
+                self._to_utc(captured_at),
+                float(lease_seconds),
+            )
+        return row is not None
+
+    @track_storage_operation("hero_stats_snapshot_runs", "set")
+    async def complete_hero_stats_snapshot_run(
+        self, captured_at: int, row_count: int, skipped_count: int
+    ) -> None:
+        """Mark the run slot ``captured_at`` as finished.
+
+        Args:
+            captured_at: Unix timestamp identifying the run.
+            row_count: Number of snapshot rows the run stored.
+            skipped_count: Number of grid combinations the run could not fetch.
+        """
+        async with self._pool.acquire() as conn:  # type: ignore[union-attr]
+            await conn.execute(
+                """UPDATE hero_stats_snapshot_runs
+                   SET completed_at = NOW(), row_count = $2, skipped_count = $3
+                   WHERE captured_at = $1""",
+                self._to_utc(captured_at),
+                row_count,
+                skipped_count,
             )
 
     @staticmethod
@@ -425,6 +495,10 @@ class PostgresStorage(metaclass=Singleton):
     ) -> list[int]:
         """List distinct snapshot timestamps matching the given filters.
 
+        Timestamps whose run is recorded as unfinished are excluded, so a
+        partially written grid is never reported. Timestamps with no run
+        recorded at all (snapshots taken before run tracking existed) are kept.
+
         Returns list of int Unix timestamps, most recent first.
         """
         conditions, params = self._build_snapshot_filters(
@@ -437,8 +511,10 @@ class PostgresStorage(metaclass=Singleton):
 
         where_clause = " AND ".join(conditions)
         query = (
-            "SELECT DISTINCT captured_at FROM hero_stats_snapshots "  # noqa: S608
+            "SELECT DISTINCT captured_at FROM hero_stats_snapshots s "  # noqa: S608
             f"WHERE {where_clause} "
+            "AND NOT EXISTS (SELECT 1 FROM hero_stats_snapshot_runs r "
+            "WHERE r.captured_at = s.captured_at AND r.completed_at IS NULL) "
             "ORDER BY captured_at DESC"
         )
 
@@ -495,7 +571,8 @@ class PostgresStorage(metaclass=Singleton):
         """Truncate all tables (for testing)."""
         async with self._pool.acquire() as conn:  # type: ignore[union-attr]
             await conn.execute(
-                "TRUNCATE static_data, player_profiles, hero_stats_snapshots"
+                "TRUNCATE static_data, player_profiles, hero_stats_snapshots, "
+                "hero_stats_snapshot_runs"
             )
 
     # ------------------------------------------------------------------ #

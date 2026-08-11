@@ -103,6 +103,39 @@ class StoragePort(Protocol):
         ``map``, ``tier``, ``hero``, ``pickrate``, ``winrate`` and optional
         ``banrate`` keys.
         All rows share the same ``captured_at`` timestamp.
+
+        Storing the same (platform, gamemode, region, map, tier, hero,
+        captured_at) combination twice overwrites the previous values instead
+        of appending a second row, so a repeated or resumed run is idempotent.
+        """
+        ...
+
+    async def claim_hero_stats_snapshot_run(
+        self, captured_at: int, lease_seconds: int
+    ) -> bool:
+        """Atomically claim the snapshot run identified by ``captured_at``.
+
+        Acts as the cross-process lock for the snapshot cron: durable (unlike a
+        cache TTL, it survives a restart) and keyed on the run slot rather than
+        on wall-clock time.
+
+        Returns True when the caller may run the snapshot, which is the case
+        when no run exists for ``captured_at``, or when an unfinished run was
+        started more than ``lease_seconds`` ago (its worker is gone and the run
+        may be resumed under the same slot). Returns False when the slot is
+        already held by a completed run, or by a run still within its lease.
+        """
+        ...
+
+    async def complete_hero_stats_snapshot_run(
+        self, captured_at: int, row_count: int, skipped_count: int
+    ) -> None:
+        """Mark the run identified by ``captured_at`` as finished.
+
+        Only a run that is either completed or absent is reported by
+        :meth:`get_hero_stats_history_dates`. ``row_count`` is the number of
+        rows the run stored and ``skipped_count`` the number of grid
+        combinations it could not fetch, both kept for diagnostics.
         """
         ...
 
@@ -151,6 +184,11 @@ class StoragePort(Protocol):
 
         ``platform`` and ``gamemode`` are required; ``region``, ``map_`` and
         ``tier`` are optional filters.
+
+        Timestamps belonging to a snapshot run that was claimed but never
+        completed are excluded, so a partially written grid is never reported.
+        Timestamps with no run recorded at all — snapshots written before run
+        tracking existed — stay visible.
 
         Returns list of int Unix timestamps, ordered by ``captured_at``
         descending (most recent first).

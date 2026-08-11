@@ -1,6 +1,7 @@
 """Tests for the StoragePort contract — exercised via FakeStorage"""
 
 import time
+from typing import ClassVar
 
 import pytest
 
@@ -502,6 +503,33 @@ class TestHeroStatsSnapshots:
         assert all(r["platform"] == "pc" for r in result)
 
     @pytest.mark.asyncio
+    async def test_restoring_a_grid_cell_overwrites_it(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(1700000001, [{**base}])
+
+        await storage_db.store_hero_stats_snapshots(
+            1700000001, [{**base, "pickrate": 9.0, "winrate": 60.0, "banrate": 1.0}]
+        )
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc", gamemode="competitive"
+        )
+
+        assert len(result) == 1
+        assert result[0]["pickrate"] == 9.0  # noqa: PLR2004
+        assert result[0]["winrate"] == 60.0  # noqa: PLR2004
+        assert result[0]["banrate"] == 1.0
+
+    @pytest.mark.asyncio
     async def test_delete_old_snapshots(self, storage_db):
         now = int(time.time())
         base = {
@@ -530,6 +558,114 @@ class TestHeroStatsSnapshots:
         )
         assert len(remaining) == 1
         assert remaining[0]["captured_at"] == now - 10
+
+
+class TestHeroStatsSnapshotRuns:
+    """Test the snapshot run slot contract: claim, complete, and visibility"""
+
+    SNAPSHOT_ROW: ClassVar[dict] = {
+        "platform": "pc",
+        "gamemode": "competitive",
+        "region": "europe",
+        "map": "busan",
+        "tier": "all",
+        "hero": "ana",
+        "pickrate": 5.0,
+        "winrate": 50.0,
+    }
+
+    @pytest.mark.asyncio
+    async def test_free_slot_is_claimed(self, storage_db):
+        claimed = await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+
+        assert claimed is True
+
+    @pytest.mark.asyncio
+    async def test_second_claim_within_the_lease_stands_down(self, storage_db):
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+
+        claimed = await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+
+        assert claimed is False
+
+    @pytest.mark.asyncio
+    async def test_expired_lease_lets_a_later_worker_resume(self, storage_db):
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+
+        claimed = await storage_db.claim_hero_stats_snapshot_run(1700006400, 0)
+
+        assert claimed is True
+
+    @pytest.mark.asyncio
+    async def test_completed_run_is_never_reclaimed(self, storage_db):
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+        await storage_db.complete_hero_stats_snapshot_run(1700006400, 1500, 3)
+
+        claimed = await storage_db.claim_hero_stats_snapshot_run(1700006400, 0)
+
+        assert claimed is False
+
+    @pytest.mark.asyncio
+    async def test_unfinished_run_hides_its_dates(self, storage_db):
+        await storage_db.store_hero_stats_snapshots(1700006400, [{**self.SNAPSHOT_ROW}])
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+
+        result = await storage_db.get_hero_stats_history_dates(
+            platform="pc", gamemode="competitive"
+        )
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_completing_a_run_publishes_its_dates(self, storage_db):
+        await storage_db.store_hero_stats_snapshots(1700006400, [{**self.SNAPSHOT_ROW}])
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+        await storage_db.complete_hero_stats_snapshot_run(1700006400, 1, 0)
+
+        result = await storage_db.get_hero_stats_history_dates(
+            platform="pc", gamemode="competitive"
+        )
+
+        assert result == [1700006400]
+
+    @pytest.mark.asyncio
+    async def test_dates_without_any_run_recorded_stay_visible(self, storage_db):
+        """Snapshots written before run tracking existed are not hidden."""
+        await storage_db.store_hero_stats_snapshots(1700006400, [{**self.SNAPSHOT_ROW}])
+
+        result = await storage_db.get_hero_stats_history_dates(
+            platform="pc", gamemode="competitive"
+        )
+
+        assert result == [1700006400]
+
+    @pytest.mark.asyncio
+    async def test_an_unfinished_run_hides_only_its_own_slot(self, storage_db):
+        await storage_db.store_hero_stats_snapshots(1700006400, [{**self.SNAPSHOT_ROW}])
+        await storage_db.store_hero_stats_snapshots(1700092800, [{**self.SNAPSHOT_ROW}])
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+        await storage_db.claim_hero_stats_snapshot_run(1700092800, 21600)
+        await storage_db.complete_hero_stats_snapshot_run(1700092800, 1, 0)
+
+        result = await storage_db.get_hero_stats_history_dates(
+            platform="pc", gamemode="competitive"
+        )
+
+        assert result == [1700092800]
+
+    @pytest.mark.asyncio
+    async def test_history_rows_of_an_unfinished_run_are_still_readable(
+        self, storage_db
+    ):
+        """Only the date listing hides a partial grid — the rows themselves remain."""
+        await storage_db.store_hero_stats_snapshots(1700006400, [{**self.SNAPSHOT_ROW}])
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc", gamemode="competitive"
+        )
+
+        assert len(result) == 1
 
 
 class TestDataIntegrity:
