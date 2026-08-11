@@ -345,7 +345,12 @@ class HeroCareerStats(BaseModel):
 
 CareerStats = create_model(  # ty: ignore[no-matching-overload]
     "CareerStats",
-    __config__=ConfigDict(json_schema_extra={"example": CareerStatsExample}),
+    __config__=ConfigDict(
+        # Heroes released after the last heroes.csv update have no field here.
+        # Without "allow", pydantic would silently drop them from the response.
+        extra="allow",
+        json_schema_extra={"example": CareerStatsExample},
+    ),
     all_heroes=(
         list[HeroCareerStats] | None,
         Field(
@@ -512,6 +517,7 @@ class PlayerRolesStats(BaseModel):
 
 PlayerHeroesStats = create_model(  # ty: ignore[no-matching-overload]
     "PlayerHeroesStats",
+    __config__=ConfigDict(extra="allow"),
     **{
         hero_key.name.lower(): (
             StatsSummary | None,
@@ -569,7 +575,10 @@ HeroPlayerCareerStats = create_model(  # ty: ignore[no-matching-overload]
 
 PlayerCareerStats = create_model(  # ty: ignore[no-matching-overload]
     "PlayerCareerStats",
-    __config__=ConfigDict(json_schema_extra={"example": PlayerCareerStatsExample}),
+    __config__=ConfigDict(
+        extra="allow",
+        json_schema_extra={"example": PlayerCareerStatsExample},
+    ),
     all_heroes=(
         HeroPlayerCareerStats | None,
         Field(

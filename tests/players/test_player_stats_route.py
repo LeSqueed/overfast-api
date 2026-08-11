@@ -58,16 +58,78 @@ def test_get_player_stats_valid_hero(client: TestClient, uri: str):
 
 @pytest.mark.parametrize("player_html_data", ["TeKrop-2217"], indirect=True)
 @pytest.mark.parametrize(("uri"), [("/stats"), ("/stats/career")])
-def test_get_player_stats_invalid_hero(client: TestClient, uri: str):
+@pytest.mark.parametrize(
+    "hero",
+    ["invalid_hero", "Ana", "ana!", "", "a" * 51],
+)
+def test_get_player_stats_malformed_hero(client: TestClient, uri: str, hero: str):
     response = client.get(
         f"/players/TeKrop-2217{uri}",
         params={
             "gamemode": PlayerGamemode.QUICKPLAY,
-            "hero": "invalid_hero",
+            "hero": hero,
+        },
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+@pytest.mark.parametrize("player_html_data", ["TeKrop-2217"], indirect=True)
+@pytest.mark.parametrize(("uri"), [("/stats"), ("/stats/career")])
+def test_get_player_stats_unknown_hero(client: TestClient, uri: str):
+    response = client.get(
+        f"/players/TeKrop-2217{uri}",
+        params={
+            "gamemode": PlayerGamemode.QUICKPLAY,
+            "hero": "anaa",
         },
     )
 
     assert response.status_code == status.HTTP_200_OK
+    assert response.json() == {}
+
+
+@pytest.mark.parametrize("player_html_data", ["TeKrop-2217"], indirect=True)
+@pytest.mark.parametrize(
+    ("uri", "patch_target", "hero_stats"),
+    [
+        (
+            "/stats",
+            "app.domain.services.player_service.PlayerService.get_player_stats",
+            [
+                {
+                    "category": "combat",
+                    "label": "Combat",
+                    "stats": [
+                        {"key": "eliminations", "label": "Eliminations", "value": 42},
+                    ],
+                },
+            ],
+        ),
+        (
+            "/stats/career",
+            "app.domain.services.player_service.PlayerService.get_player_career_stats",
+            {"combat": {"eliminations": 42}},
+        ),
+    ],
+)
+def test_get_player_stats_released_hero_not_in_csv(
+    client: TestClient,
+    uri: str,
+    patch_target: str,
+    hero_stats: list | dict,
+):
+    with patch(patch_target, return_value=({"brand-new-hero": hero_stats}, False, 0)):
+        response = client.get(
+            f"/players/TeKrop-2217{uri}",
+            params={
+                "gamemode": PlayerGamemode.QUICKPLAY,
+                "hero": "brand-new-hero",
+            },
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == {"brand-new-hero": hero_stats}
 
 
 @pytest.mark.parametrize("player_html_data", ["TeKrop-2217"], indirect=True)

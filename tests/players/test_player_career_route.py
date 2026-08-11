@@ -130,6 +130,17 @@ def test_get_player_career_released_hero_not_in_csv(client: TestClient):
         "label": "Time Played",
         "values": [{"hero": "brand-new-hero", "value": 120}],
     }
+    career_stats = {
+        "brand-new-hero": [
+            {
+                "category": "combat",
+                "label": "Combat",
+                "stats": [
+                    {"key": "eliminations", "label": "Eliminations", "value": 42},
+                ],
+            },
+        ],
+    }
 
     with patch(
         "app.domain.services.player_service.PlayerService.get_player_career",
@@ -147,7 +158,7 @@ def test_get_player_career_released_hero_not_in_csv(client: TestClient):
                     "pc": {
                         "quickplay": {
                             "heroes_comparisons": hero_comparisons,
-                            "career_stats": {},
+                            "career_stats": career_stats,
                         },
                         "competitive": None,
                     },
@@ -161,11 +172,14 @@ def test_get_player_career_released_hero_not_in_csv(client: TestClient):
         response = client.get("/players/TeKrop-2217")
 
     assert response.status_code == status.HTTP_200_OK
+    quickplay_stats = response.json()["stats"]["pc"]["quickplay"]
     assert (
-        response.json()["stats"]["pc"]["quickplay"]["heroes_comparisons"][
-            "time_played"
-        ]["values"][0]["hero"]
+        quickplay_stats["heroes_comparisons"]["time_played"]["values"][0]["hero"]
         == "brand-new-hero"
+    )
+    assert (
+        quickplay_stats["career_stats"]["brand-new-hero"]
+        == career_stats["brand-new-hero"]
     )
 
 

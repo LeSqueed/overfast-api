@@ -9,7 +9,7 @@ This module computes aggregated player statistics with:
 from collections import defaultdict
 from copy import deepcopy
 
-from app.domain.enums import HeroKey, PlayerGamemode, PlayerPlatform, Role
+from app.domain.enums import PlayerGamemode, PlayerPlatform, Role
 from app.domain.parsers.player_helpers import (
     get_hero_role,
     get_plural_stat_key,
@@ -80,8 +80,12 @@ def extract_heroes_stats_from_profile(profile_stats: dict) -> dict:
 
 
 def _compute_heroes_stats(raw_heroes_stats: dict) -> dict:
-    """Compute heroes stats for every gamemode and platform"""
-    heroes_stats = {hero_key: defaultdict(dict) for hero_key in HeroKey}
+    """Compute heroes stats for every gamemode and platform.
+
+    Heroes are seeded from the parsed data rather than from the ``HeroKey`` enum,
+    so a hero released after the last ``heroes.csv`` update is still reported.
+    """
+    heroes_stats: defaultdict = defaultdict(lambda: defaultdict(dict))
 
     for platform, platform_stats in raw_heroes_stats.items():
         platform_gamemodes_stats = {
@@ -98,20 +102,11 @@ def _compute_heroes_stats(raw_heroes_stats: dict) -> dict:
             }
 
             for hero_key, hero_stats in career_stats.items():
-                if hero_key not in heroes_stats:
-                    logger.info(
-                        "Unknown hero '{}' in career stats, skipping"
-                        " (platform={}, gamemode={})",
-                        hero_key,
-                        platform,
-                        gamemode,
-                    )
-                    continue
                 heroes_stats[hero_key][platform][gamemode] = _compute_hero_stats(
                     hero_stats
                 )
 
-    return heroes_stats
+    return dict(heroes_stats)
 
 
 def _compute_hero_stats(hero_stats: list[dict]) -> dict:
@@ -257,6 +252,11 @@ def compute_roles_stats(heroes_stats: dict) -> dict:
     for hero_key, hero_stats in heroes_stats.items():
         hero_role = get_hero_role(hero_key)
         if hero_role is None:
+            logger.info(
+                "Hero '{}' has no role in heroes.csv, excluding it from the roles "
+                "and general aggregations",
+                hero_key,
+            )
             continue
         for stat_name in GENERIC_STATS_NAMES:
             roles_stats[hero_role][stat_name] += hero_stats[stat_name]

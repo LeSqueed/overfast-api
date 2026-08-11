@@ -134,6 +134,81 @@ def test_get_player_stats_summary_blizzard_timeout(client: TestClient):
 
 
 @pytest.mark.parametrize("player_html_data", ["TeKrop-2217"], indirect=True)
+def test_get_player_stats_summary_released_hero_not_in_csv(client: TestClient):
+    profile_data = {
+        "summary": {},
+        "stats": {
+            "pc": {
+                "quickplay": {
+                    "career_stats": {
+                        "brand-new-hero": [
+                            {
+                                "category": "game",
+                                "label": "Game",
+                                "stats": [
+                                    {"key": "games_played", "value": 10},
+                                    {"key": "games_lost", "value": 4},
+                                    {"key": "time_played", "value": 3600},
+                                ],
+                            },
+                            {
+                                "category": "combat",
+                                "label": "Combat",
+                                "stats": [
+                                    {"key": "eliminations", "value": 100},
+                                    {"key": "deaths", "value": 20},
+                                    {"key": "all_damage_done", "value": 5000},
+                                ],
+                            },
+                            {
+                                "category": "assists",
+                                "label": "Assists",
+                                "stats": [
+                                    {"key": "offensive_assists", "value": 30},
+                                    {"key": "healing_done", "value": 2000},
+                                ],
+                            },
+                        ],
+                    },
+                },
+                "competitive": None,
+            },
+            "console": None,
+        },
+    }
+
+    with patch(
+        "app.domain.parsers.player_stats.parse_player_profile_html",
+        return_value=profile_data,
+    ):
+        response = client.get("/players/TeKrop-2217/stats/summary")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["heroes"]["brand-new-hero"] == {
+        "games_played": 10,
+        "games_won": 6,
+        "games_lost": 4,
+        "time_played": 3600,
+        "winrate": 60.0,
+        "kda": 6.5,
+        "total": {
+            "eliminations": 100,
+            "assists": 30,
+            "deaths": 20,
+            "damage": 5000,
+            "healing": 2000,
+        },
+        "average": {
+            "eliminations": 16.67,
+            "assists": 5.0,
+            "deaths": 3.33,
+            "damage": 833.33,
+            "healing": 333.33,
+        },
+    }
+
+
+@pytest.mark.parametrize("player_html_data", ["TeKrop-2217"], indirect=True)
 def test_get_player_stats_summary_internal_error(client: TestClient):
     with patch(
         "app.domain.services.player_service.PlayerService.get_player_stats_summary",

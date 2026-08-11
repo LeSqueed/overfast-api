@@ -23,9 +23,15 @@ from app.api.models.players import (
 )
 from app.config import settings
 from app.domain.enums import (
+    HeroKeyCareerFilter,
     PlayerGamemode,
     PlayerPlatform,
 )
+
+# Shape of a Blizzard hero key, matching the "lowercase-hyphenated" convention
+# used by heroes.csv. Deliberately a shape check rather than an enum membership
+# check, so heroes released after the last API update remain filterable.
+HERO_KEY_PATTERN = r"^[a-z0-9-]{1,50}$"
 
 # Custom route responses for player careers
 career_routes_responses = {
@@ -72,15 +78,24 @@ async def get_player_career_common_parameters(
         ),
         examples=["pc"],
     ),
-    hero: str = Query(
-        None,
-        title="Hero key",
-        description=(
-            "Filter on a specific hero in order to only get his statistics. "
-            "You also can specify 'all-heroes' for general stats."
+    hero: Annotated[
+        str | None,
+        Query(
+            title="Hero key",
+            description=(
+                "Filter on a specific hero in order to only get his statistics. "
+                "You also can specify 'all-heroes' for general stats. "
+                "Validated on shape only, so a hero released after the last API "
+                "update can be filtered on before it is added to the known keys "
+                "listed below."
+            ),
+            pattern=HERO_KEY_PATTERN,
+            json_schema_extra={
+                "examples": [hero_key.value for hero_key in HeroKeyCareerFilter],
+            },
         ),
-    ),
-):
+    ] = None,
+) -> dict:
     return {
         "player_id": commons.get("player_id"),
         "gamemode": gamemode,
