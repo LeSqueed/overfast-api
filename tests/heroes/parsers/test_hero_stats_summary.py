@@ -142,9 +142,35 @@ def test_parse_hero_stats_json_banrate_present(hero_stats_json_data: dict):
         order_by="hero:asc",
     )
 
+    banrates = {stat["hero"]: stat["banrate"] for stat in hero_stats}
     assert len(hero_stats) > 0
     assert all("banrate" in stat for stat in hero_stats)
-    assert all(stat["banrate"] is not None for stat in hero_stats)
+    assert all(isinstance(stat["banrate"], float) for stat in hero_stats)
+    assert {hero: banrates[hero] for hero in ("ana", "sombra", "zenyatta")} == {
+        "ana": 12.4,
+        "sombra": 34.8,
+        "zenyatta": 8.9,
+    }
+
+
+def test_parse_hero_stats_json_banrate_integer_is_coerced_to_float(
+    hero_stats_json_data: dict,
+):
+    json_data = copy.deepcopy(hero_stats_json_data)
+    for rate in json_data["rates"]["rates"]:
+        rate["cells"]["banrate"] = 3
+
+    hero_stats = parse_hero_stats_json(
+        json_data,
+        map_filter="all-maps",
+        gamemode=PlayerGamemode.COMPETITIVE,
+        gamemode_filter="1",
+        order_by="hero:asc",
+    )
+
+    assert len(hero_stats) > 0
+    assert {stat["banrate"] for stat in hero_stats} == {3.0}
+    assert all(isinstance(stat["banrate"], float) for stat in hero_stats)
 
 
 def test_parse_hero_stats_json_banrate_missing(hero_stats_json_data: dict):

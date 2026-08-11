@@ -15,7 +15,7 @@
                     "name": "Ana",
                     "pickrate": 22.3,
                     "winrate": 43.1,
-                    "banrate": 1
+                    "banrate": 12.4
                 },
                 "hero": {
                     "color": "48699eff",
@@ -31,7 +31,7 @@
                     "name": "Ashe",
                     "pickrate": 28.9,
                     "winrate": 55.1,
-                    "banrate": 2.7
+                    "banrate": 8.1
                 },
                 "hero": {
                     "color": "3e3c3aff",
@@ -47,7 +47,7 @@
                     "name": "Baptiste",
                     "pickrate": 47.8,
                     "winrate": 57.4,
-                    "banrate": 4.4
+                    "banrate": 5.6
                 },
                 "hero": {
                     "color": "28a5c3ff",
@@ -63,7 +63,7 @@
                     "name": "Bastion",
                     "pickrate": 2.7,
                     "winrate": 57,
-                    "banrate": 6.1
+                    "banrate": 3.2
                 },
                 "hero": {
                     "color": "5b7351ff",
@@ -79,7 +79,7 @@
                     "name": "Brigitte",
                     "pickrate": 25.2,
                     "winrate": 46.8,
-                    "banrate": 7.8
+                    "banrate": 2.8
                 },
                 "hero": {
                     "color": "72332aff",
@@ -95,7 +95,7 @@
                     "name": "Cassidy",
                     "pickrate": 21.3,
                     "winrate": 41,
-                    "banrate": 9.5
+                    "banrate": 6.7
                 },
                 "hero": {
                     "color": "a62927ff",
@@ -111,7 +111,7 @@
                     "name": "D.Va",
                     "pickrate": 12.9,
                     "winrate": 64.8,
-                    "banrate": 11.2
+                    "banrate": 9.3
                 },
                 "hero": {
                     "color": "fc79bdff",
@@ -127,7 +127,7 @@
                     "name": "Doomfist",
                     "pickrate": 7.2,
                     "winrate": 43.5,
-                    "banrate": 12.9
+                    "banrate": 21.5
                 },
                 "hero": {
                     "color": "661e0fff",
@@ -143,7 +143,7 @@
                     "name": "Echo",
                     "pickrate": 1,
                     "winrate": 59.1,
-                    "banrate": 14.6
+                    "banrate": 4.1
                 },
                 "hero": {
                     "color": "89c8ffff",
@@ -159,7 +159,7 @@
                     "name": "Freja",
                     "pickrate": 2.7,
                     "winrate": 46,
-                    "banrate": 16.299999999999997
+                    "banrate": 7.9
                 },
                 "hero": {
                     "color": "3f93ffff",
@@ -175,7 +175,7 @@
                     "name": "Genji",
                     "pickrate": 10.4,
                     "winrate": 49.8,
-                    "banrate": 18
+                    "banrate": 14.2
                 },
                 "hero": {
                     "color": "80fb00ff",
@@ -191,7 +191,7 @@
                     "name": "Hanzo",
                     "pickrate": 4.5,
                     "winrate": 50.2,
-                    "banrate": 19.7
+                    "banrate": 11.6
                 },
                 "hero": {
                     "color": "b2a865ff",
@@ -207,7 +207,7 @@
                     "name": "Hazard",
                     "pickrate": 7.9,
                     "winrate": 50.7,
-                    "banrate": 1.3999999999999986
+                    "banrate": 6.3
                 },
                 "hero": {
                     "color": "985ec0ff",
@@ -223,7 +223,7 @@
                     "name": "Illari",
                     "pickrate": 32.2,
                     "winrate": 57.2,
-                    "banrate": 3.099999999999998
+                    "banrate": 3.7
                 },
                 "hero": {
                     "color": "a58c54ff",
@@ -239,7 +239,7 @@
                     "name": "Junker Queen",
                     "pickrate": 4.3,
                     "winrate": 45.9,
-                    "banrate": 4.800000000000001
+                    "banrate": 5.1
                 },
                 "hero": {
                     "color": "579fcfff",
@@ -255,7 +255,7 @@
                     "name": "Junkrat",
                     "pickrate": 1.1,
                     "winrate": 33.9,
-                    "banrate": 6.5
+                    "banrate": 2.4
                 },
                 "hero": {
                     "color": "f7b217ff",
@@ -271,7 +271,7 @@
                     "name": "Juno",
                     "pickrate": 3.1,
                     "winrate": 56.4,
-                    "banrate": 8.2
+                    "banrate": 4.6
                 },
                 "hero": {
                     "color": "721fa3ff",
@@ -287,7 +287,7 @@
                     "name": "Kiriko",
                     "pickrate": 19.7,
                     "winrate": 41.2,
-                    "banrate": 9.899999999999999
+                    "banrate": 18.9
                 },
                 "hero": {
                     "color": "d04656ff",
@@ -303,7 +303,7 @@
                     "name": "Lifeweaver",
                     "pickrate": 3.8,
                     "winrate": 31,
-                    "banrate": 11.599999999999998
+                    "banrate": 1.8
                 },
                 "hero": {
                     "color": "e1a5baff",
@@ -319,7 +319,7 @@
                     "name": "L\u00facio",
                     "pickrate": 8.4,
                     "winrate": 52.7,
-                    "banrate": 13.299999999999997
+                    "banrate": 3.4
                 },
                 "hero": {
                     "color": "67c519ff",
@@ -335,7 +335,7 @@
                     "name": "Mauga",
                     "pickrate": 15.2,
                     "winrate": 52.5,
-                    "banrate": 15
+                    "banrate": 10.2
                 },
                 "hero": {
                     "color": "db4216ff",
@@ -351,7 +351,7 @@
                     "name": "Mei",
                     "pickrate": 4.4,
                     "winrate": 43.9,
-                    "banrate": 16.699999999999996
+                    "banrate": 7.2
                 },
                 "hero": {
                     "color": "469af0ff",
@@ -367,7 +367,7 @@
                     "name": "Mercy",
                     "pickrate": 10.4,
                     "winrate": 48.5,
-                    "banrate": 18.4
+                    "banrate": 16.5
                 },
                 "hero": {
                     "color": "faf2adff",
@@ -383,7 +383,7 @@
                     "name": "Moira",
                     "pickrate": 6,
                     "winrate": 35,
-                    "banrate": 20.1
+                    "banrate": 5.9
                 },
                 "hero": {
                     "color": "804be5ff",
@@ -399,7 +399,7 @@
                     "name": "Orisa",
                     "pickrate": -1,
                     "winrate": -1,
-                    "banrate": 1.7999999999999972
+                    "banrate": 13.1
                 },
                 "hero": {
                     "color": "106f04ff",
@@ -415,7 +415,7 @@
                     "name": "Pharah",
                     "pickrate": 2.4,
                     "winrate": 62.8,
-                    "banrate": 3.5
+                    "banrate": 6.8
                 },
                 "hero": {
                     "color": "58bcff",
@@ -431,7 +431,7 @@
                     "name": "Ramattra",
                     "pickrate": 4.2,
                     "winrate": 37.7,
-                    "banrate": 5.199999999999996
+                    "banrate": 4.9
                 },
                 "hero": {
                     "color": "7d55c7ff",
@@ -447,7 +447,7 @@
                     "name": "Reaper",
                     "pickrate": 4.2,
                     "winrate": 49.5,
-                    "banrate": 6.899999999999999
+                    "banrate": 2.1
                 },
                 "hero": {
                     "color": "5e001aff",
@@ -463,7 +463,7 @@
                     "name": "Reinhardt",
                     "pickrate": 5.3,
                     "winrate": 48.8,
-                    "banrate": 8.600000000000001
+                    "banrate": 8.6
                 },
                 "hero": {
                     "color": "7c8b8cff",
@@ -479,7 +479,7 @@
                     "name": "Roadhog",
                     "pickrate": 3.5,
                     "winrate": 42.6,
-                    "banrate": 10.299999999999997
+                    "banrate": 9.7
                 },
                 "hero": {
                     "color": "ae6f1cff",
@@ -495,7 +495,7 @@
                     "name": "Sigma",
                     "pickrate": 9.2,
                     "winrate": 54.6,
-                    "banrate": 12
+                    "banrate": 11.3
                 },
                 "hero": {
                     "color": "7c8b8cff",
@@ -511,7 +511,7 @@
                     "name": "Sojourn",
                     "pickrate": 33.3,
                     "winrate": 45.2,
-                    "banrate": 13.699999999999996
+                    "banrate": 15.4
                 },
                 "hero": {
                     "color": "d73e2cff",
@@ -527,7 +527,7 @@
                     "name": "Soldier: 76",
                     "pickrate": 36.6,
                     "winrate": 50,
-                    "banrate": 15.399999999999999
+                    "banrate": 5.3
                 },
                 "hero": {
                     "color": "445275ff",
@@ -543,7 +543,7 @@
                     "name": "Sombra",
                     "pickrate": 5,
                     "winrate": 50,
-                    "banrate": 17.1
+                    "banrate": 34.8
                 },
                 "hero": {
                     "color": "5128a9ff",
@@ -559,7 +559,7 @@
                     "name": "Symmetra",
                     "pickrate": 4.2,
                     "winrate": 61.1,
-                    "banrate": 18.799999999999997
+                    "banrate": 3.9
                 },
                 "hero": {
                     "color": "76b4c9ff",
@@ -575,7 +575,7 @@
                     "name": "Torbj\u00f6rn",
                     "pickrate": 1.8,
                     "winrate": 38.3,
-                    "banrate": 20.5
+                    "banrate": 2.6
                 },
                 "hero": {
                     "color": "ba4c3fff",
@@ -591,7 +591,7 @@
                     "name": "Tracer",
                     "pickrate": 22.1,
                     "winrate": 54.1,
-                    "banrate": 2.1999999999999957
+                    "banrate": 12.7
                 },
                 "hero": {
                     "color": "de7a00ff",
@@ -607,7 +607,7 @@
                     "name": "Venture",
                     "pickrate": 4.5,
                     "winrate": 45.8,
-                    "banrate": 3.8999999999999986
+                    "banrate": 4.3
                 },
                 "hero": {
                     "color": "79614eff",
@@ -623,7 +623,7 @@
                     "name": "Widowmaker",
                     "pickrate": 10.6,
                     "winrate": 56,
-                    "banrate": 5.599999999999994
+                    "banrate": 28.6
                 },
                 "hero": {
                     "color": "8b3f8fff",
@@ -639,7 +639,7 @@
                     "name": "Winston",
                     "pickrate": 3.1,
                     "winrate": 44.7,
-                    "banrate": 7.299999999999997
+                    "banrate": 7.4
                 },
                 "hero": {
                     "color": "8f92aeff",
@@ -655,7 +655,7 @@
                     "name": "Wrecking Ball",
                     "pickrate": 4.2,
                     "winrate": 45,
-                    "banrate": 9
+                    "banrate": 6.1
                 },
                 "hero": {
                     "color": "e2790aff",
@@ -671,7 +671,7 @@
                     "name": "Wuyang",
                     "pickrate": 14.5,
                     "winrate": 58.7,
-                    "banrate": 10.700000000000003
+                    "banrate": 3.6
                 },
                 "hero": {
                     "color": "4c7fefff",
@@ -687,7 +687,7 @@
                     "name": "Zarya",
                     "pickrate": 3.7,
                     "winrate": 42,
-                    "banrate": 12.399999999999991
+                    "banrate": 10.9
                 },
                 "hero": {
                     "color": "f65ea6ff",
@@ -703,7 +703,7 @@
                     "name": "Zenyatta",
                     "pickrate": 6.7,
                     "winrate": 47.1,
-                    "banrate": 14.099999999999994
+                    "banrate": 8.9
                 },
                 "hero": {
                     "color": "fcee5aff",

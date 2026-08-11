@@ -52,8 +52,8 @@ def test_parse_maps_csv_returns_all_maps():
 
 def test_parse_maps_csv_entry_format():
     result = parse_maps_csv()
-    first = result[0]
 
+    first = result[0]
     assert set(first.keys()) == {
         "key",
         "name",
@@ -216,8 +216,8 @@ def test_parse_maps_html_enriches_csv_maps_with_competitive_flag(
     rates_maps_html_data: str,
 ):
     result = parse_maps_html(rates_maps_html_data)
-    by_key = {m["key"]: m for m in result}
 
+    by_key = {m["key"]: m for m in result}
     busan = by_key["busan"]
     assert busan["competitive"] is True
     assert busan["location"] is not None
@@ -232,8 +232,8 @@ def test_parse_maps_html_new_map_falls_back_to_null(rates_maps_html_data: str):
     )
 
     result = parse_maps_html(html)
-    by_key = {m["key"]: m for m in result}
 
+    by_key = {m["key"]: m for m in result}
     new_map = by_key["brand-new-map"]
     assert new_map["competitive"] is True
     assert new_map["name"] == "Brand New Map"
@@ -251,16 +251,16 @@ def test_parse_maps_html_keeps_non_ascii_scraped_only_map_name(
     )
 
     result = parse_maps_html(html)
-    by_key = {m["key"]: m for m in result}
 
+    by_key = {m["key"]: m for m in result}
     assert by_key["chateau-vermeil"]["name"] == "Château Vermeil"
     assert by_key["chateau-vermeil"]["competitive"] is True
 
 
 def test_parse_maps_html_keeps_non_ascii_csv_map_name(rates_maps_html_data: str):
     result = parse_maps_html(rates_maps_html_data)
-    by_key = {m["key"]: m for m in result}
 
+    by_key = {m["key"]: m for m in result}
     assert by_key["paraiso"]["name"] == "Paraíso"
     assert by_key["esperanca"]["name"] == "Esperança"
 
@@ -274,8 +274,8 @@ def test_parse_maps_html_empty_scraped_name_falls_back_to_key(
     )
 
     result = parse_maps_html(html)
-    by_key = {m["key"]: m for m in result}
 
+    by_key = {m["key"]: m for m in result}
     assert by_key["brand-new-map"]["name"] == "brand-new-map"
 
 
@@ -319,8 +319,8 @@ def test_parse_maps_html_degrades_to_csv_on_broken_html():
 
 def test_parse_maps_html_keeps_csv_metadata_when_degraded():
     result = parse_maps_html("<not-even-html>")
-    by_key = {m["key"]: m for m in result}
 
+    by_key = {m["key"]: m for m in result}
     assert by_key["busan"]["location"] is not None
     assert by_key["busan"]["screenshot"] is not None
     assert by_key["busan"]["gamemodes"] == ["control"]
