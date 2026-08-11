@@ -10,6 +10,7 @@ from app.domain.exceptions import (
     ParserBlizzardError,
     ParserParsingError,
 )
+from app.domain.parsers.maps import ALL_MAPS_FILTER
 from app.domain.parsers.utils import validate_response_status
 
 if TYPE_CHECKING:
@@ -28,7 +29,7 @@ async def fetch_hero_stats_json(
     gamemode: PlayerGamemode,
     gamemode_filter: str,
     region: PlayerRegion,
-    map_filter: str = "all-maps",
+    map_filter: str = ALL_MAPS_FILTER,
     competitive_division: str | None = None,
 ) -> dict:
     """Fetch hero stats JSON from Blizzard API
@@ -190,14 +191,14 @@ async def parse_hero_stats_summary(
         gamemode: Quickplay or Competitive
         region: Player region
         role: Optional role filter
-        map_filter: Optional map filter (defaults to "all-maps")
+        map_filter: Optional map filter (defaults to ALL_MAPS_FILTER)
         competitive_division: Optional competitive division filter
         order_by: Ordering (e.g., "pickrate:desc", "hero:asc")
 
     Returns:
         List of hero stats dicts
     """
-    map_key = map_filter or "all-maps"
+    map_key = map_filter or ALL_MAPS_FILTER
 
     json_data = await fetch_hero_stats_json(
         client,
