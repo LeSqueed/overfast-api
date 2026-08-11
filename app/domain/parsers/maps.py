@@ -1,19 +1,33 @@
 """Stateless parser functions for maps data"""
 
+import re
 from typing import TYPE_CHECKING
 
 from app.config import settings
-from app.domain.utils.csv_reader import read_csv_file
-
-if TYPE_CHECKING:
-    from app.domain.ports import BlizzardClientPort
-
+from app.domain.enums import MapGamemode, MapKey
 from app.domain.exceptions import ParserParsingError
 from app.domain.parsers.utils import (
     parse_html_root,
     safe_get_attribute,
     validate_response_status,
 )
+from app.domain.utils.csv_reader import read_csv_file
+from app.infrastructure.logger import logger
+
+if TYPE_CHECKING:
+    from app.domain.ports import BlizzardClientPort
+
+# Blizzard sentinel used in the map dropdown / stats endpoint for "no map filter".
+ALL_MAPS_FILTER = "all-maps"
+
+# Sanity thresholds a scraped dropdown must clear before it is trusted, see
+# has_known_maps_quorum() for the reasoning behind each of them.
+MIN_KNOWN_SCRAPED_MAPS = 10
+MIN_KNOWN_SCRAPED_RATIO = 0.5
+
+_NON_SLUG_CHARS = re.compile(r"[^a-z0-9]+")
+_MAP_KEY_VALUES = frozenset(map_key.value for map_key in MapKey)
+_MAP_GAMEMODE_VALUES = frozenset(gamemode.value for gamemode in MapGamemode)
 
 
 def get_static_url_maps(key: str, extension: str = "jpg") -> str:
@@ -24,6 +38,8 @@ def get_static_url_maps(key: str, extension: str = "jpg") -> str:
 def parse_maps_csv() -> list[dict]:
     """
     Parse maps list from CSV file
+
+    This is the authoritative maps list: every other source may only enrich it.
 
     Returns:
         List of map dicts with keys: key, name, screenshot, gamemodes, location, country_code
@@ -55,16 +71,38 @@ async def fetch_rates_html(client: BlizzardClientPort) -> str:
     return response.text
 
 
+def slugify_gamemode(label: str) -> str | None:
+    """Convert a scraped optgroup label into a ``MapGamemode`` value.
+
+    Blizzard labels the dropdown groups with display names ("Payload Race")
+    while the CSV uses slugs ("payload-race"), so a plain ``lower()`` produces
+    a value that no ``MapGamemode`` member matches.
+
+    Returns:
+        The matching ``MapGamemode`` value, or None when the label doesn't
+        correspond to any known gamemode — the map is still kept, it just
+        carries no gamemode rather than an unusable one.
+    """
+    slug = _NON_SLUG_CHARS.sub("-", label.lower()).strip("-")
+    return slug if slug in _MAP_GAMEMODE_VALUES else None
+
+
 def parse_rates_maps_html(html: str) -> list[dict]:
     """
     Parse the competitive map list from the hero stats page map dropdown.
 
-    The dropdown (``#filter-map-select``) lists every competitive map, grouped
-    by gamemode. This is the authoritative source for which maps are in the
-    competitive rotation and gets updated by Blizzard on map releases.
+    The dropdown (``#filter-map-select``) lists the maps currently in the
+    competitive rotation, grouped by gamemode. It is an *enrichment* source
+    only — the CSV ``MapKey`` list stays authoritative — so the scrape may only
+    flag known maps as competitive or surface a map the CSV doesn't know about
+    yet. Callers should prefer :func:`parse_trusted_rates_maps_html`, which
+    sanity-checks the result before it is allowed to influence anything.
+
+    Keys are deduplicated: a map listed under several gamemode groups appears
+    once, accumulating every gamemode it was listed under.
 
     Returns:
-        List of map dicts with keys: key, name, gamemode (lowercase)
+        List of map dicts with keys: key, name, gamemodes (``MapGamemode`` values)
 
     Raises:
         ParserParsingError: If HTML structure is unexpected
@@ -76,20 +114,24 @@ def parse_rates_maps_html(html: str) -> list[dict]:
             msg = "Map filter dropdown (select#filter-map-select) not found"
             raise ParserParsingError(msg)
 
-        maps = []
+        maps: dict[str, dict] = {}
         for optgroup in map_select.css("optgroup"):
-            gamemode = (safe_get_attribute(optgroup, "label") or "").lower()
+            gamemode = slugify_gamemode(safe_get_attribute(optgroup, "label") or "")
             for option in optgroup.css("option"):
                 key = safe_get_attribute(option, "value")
-                if not key or key == "all-maps":
+                if not key or key == ALL_MAPS_FILTER:
                     continue
-                maps.append(
+                map_dict = maps.setdefault(
+                    key,
                     {
                         "key": key,
                         "name": safe_get_attribute(option, "data-title") or key,
-                        "gamemode": gamemode,
-                    }
+                        "gamemodes": [],
+                    },
                 )
+                if gamemode is not None and gamemode not in map_dict["gamemodes"]:
+                    map_dict["gamemodes"].append(gamemode)
+
         if not maps:
             msg = "No competitive maps found in map filter dropdown"
             raise ParserParsingError(msg)
@@ -98,52 +140,125 @@ def parse_rates_maps_html(html: str) -> list[dict]:
         msg = f"Failed to parse maps from rates HTML: {error!r}"
         raise ParserParsingError(msg) from error
     else:
-        return maps
+        return list(maps.values())
+
+
+def has_known_maps_quorum(scraped_maps: list[dict]) -> bool:
+    """Check a scraped dropdown looks like a real map list before trusting it.
+
+    "Parsed something" is not evidence the scrape is sound: a dropdown Blizzard
+    restructures into a handful of unrelated entries parses perfectly well and
+    would otherwise silently replace the competitive rotation.
+
+    Two thresholds must both hold, on the count of scraped keys that are known
+    ``MapKey`` values:
+
+    - at least ``MIN_KNOWN_SCRAPED_MAPS`` known maps — a plausible floor for a
+      competitive rotation, which a junk dropdown of a few entries can't reach;
+    - at least ``MIN_KNOWN_SCRAPED_RATIO`` of the scraped entries recognised —
+      so a dropdown padded with unrecognised entries is rejected even when it
+      also happens to contain enough real maps.
+
+    Both are expressed against the *scraped* entries rather than as a fraction
+    of the CSV on purpose: Blizzard legitimately rotates maps out (the CSV holds
+    every map ever released, far more than are ever in rotation), so a
+    "fraction of the CSV present" rule would reject healthy scrapes.
+    """
+    known_count = _count_known_maps(scraped_maps)
+    return (
+        known_count >= MIN_KNOWN_SCRAPED_MAPS
+        and known_count >= len(scraped_maps) * MIN_KNOWN_SCRAPED_RATIO
+    )
+
+
+def parse_trusted_rates_maps_html(html: str) -> list[dict] | None:
+    """Parse the map dropdown, returning None when the result can't be trusted.
+
+    Returns None — after logging a warning — when the dropdown is missing,
+    empty, unparseable, or fails :func:`has_known_maps_quorum`, so callers
+    degrade to the CSV instead of acting on a bad scrape.
+    """
+    try:
+        scraped_maps = parse_rates_maps_html(html)
+    except ParserParsingError as error:
+        logger.warning("Ignoring unusable competitive map dropdown: {}", error)
+        return None
+
+    if not has_known_maps_quorum(scraped_maps):
+        logger.warning(
+            "Ignoring competitive map dropdown failing the known-map quorum: "
+            "{} entries scraped, only {} known maps",
+            len(scraped_maps),
+            _count_known_maps(scraped_maps),
+        )
+        return None
+
+    return scraped_maps
 
 
 def parse_maps_html(html: str) -> list[dict]:
     """
-    Parse the full maps list, merging the scraped competitive maps with the CSV.
+    Parse the full maps list: the CSV baseline, enriched by the scraped dropdown.
 
-    The scraped competitive map list is the source of truth for which maps are
-    competitive (and their gamemode). The CSV enriches each map with
-    screenshot, location and country_code; maps not yet in the CSV fall back to
-    null values so a newly released map never breaks the API.
+    The CSV is the source of truth for which maps exist and for their metadata.
+    The scrape may only flag which of them are in the competitive rotation and
+    add a map the CSV doesn't know about yet (with null metadata, so a newly
+    released map never breaks the API).
+
+    When the scrape is unusable (missing dropdown, junk markup, failed quorum)
+    the CSV list is served as-is with ``competitive`` set to None, meaning
+    "unknown" rather than falsely reporting every map as non-competitive. A
+    scrape failure therefore never fails a maps request.
 
     Returns:
         List of map dicts with keys: key, name, screenshot, gamemodes,
         location, country_code, competitive
     """
-    competitive_maps = parse_rates_maps_html(html)
-    competitive_by_key = {map_dict["key"]: map_dict for map_dict in competitive_maps}
-
     csv_by_key = {map_dict["key"]: map_dict for map_dict in parse_maps_csv()}
+    scraped_maps = parse_trusted_rates_maps_html(html)
 
-    result = []
-    for key in sorted(set(competitive_by_key) | set(csv_by_key)):
-        scraped = competitive_by_key.get(key)
-        csv_map = csv_by_key.get(key)
+    if scraped_maps is None:
+        return [
+            _csv_map_entry(csv_by_key[key], competitive=None)
+            for key in sorted(csv_by_key)
+        ]
 
-        if csv_map is not None:
-            entry = {
-                "key": key,
-                "name": csv_map["name"],
-                "screenshot": csv_map["screenshot"],
-                "gamemodes": csv_map["gamemodes"],
-                "location": csv_map["location"],
-                "country_code": csv_map["country_code"],
-            }
-        else:
-            entry = {
-                "key": key,
-                "name": (scraped["name"] or key) if scraped else key,
-                "screenshot": None,
-                "gamemodes": [scraped["gamemode"]] if scraped else [],
-                "location": None,
-                "country_code": None,
-            }
+    scraped_by_key = {map_dict["key"]: map_dict for map_dict in scraped_maps}
 
-        entry["competitive"] = key in competitive_by_key
-        result.append(entry)
+    return [
+        _csv_map_entry(csv_by_key[key], competitive=key in scraped_by_key)
+        if key in csv_by_key
+        else _scraped_map_entry(scraped_by_key[key])
+        for key in sorted(set(csv_by_key) | set(scraped_by_key))
+    ]
 
-    return result
+
+def _count_known_maps(scraped_maps: list[dict]) -> int:
+    """Count scraped entries whose key is a known CSV ``MapKey`` value."""
+    return sum(1 for map_dict in scraped_maps if map_dict["key"] in _MAP_KEY_VALUES)
+
+
+def _csv_map_entry(csv_map: dict, *, competitive: bool | None) -> dict:
+    """Build a maps list entry from the CSV baseline."""
+    return {
+        "key": csv_map["key"],
+        "name": csv_map["name"],
+        "screenshot": csv_map["screenshot"],
+        "gamemodes": csv_map["gamemodes"],
+        "location": csv_map["location"],
+        "country_code": csv_map["country_code"],
+        "competitive": competitive,
+    }
+
+
+def _scraped_map_entry(scraped_map: dict) -> dict:
+    """Build a maps list entry for a map the CSV doesn't know about yet."""
+    return {
+        "key": scraped_map["key"],
+        "name": scraped_map["name"] or scraped_map["key"],
+        "screenshot": None,
+        "gamemodes": scraped_map["gamemodes"],
+        "location": None,
+        "country_code": None,
+        "competitive": True,
+    }

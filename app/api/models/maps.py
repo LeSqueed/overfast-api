@@ -41,10 +41,12 @@ class Map(BaseModel):
         ),
         examples=["MA"],
     )
-    competitive: bool = Field(
+    competitive: bool | None = Field(
         ...,
         description=(
-            "Whether the map is in the competitive rotation (has hero stats data)."
+            "Whether the map is in the competitive rotation (has hero stats data). "
+            "Null when the competitive rotation couldn't be determined, so an "
+            "unavailable rotation isn't reported as 'not competitive'."
         ),
         examples=[True],
     )

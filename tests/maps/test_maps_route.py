@@ -1,11 +1,12 @@
 from pathlib import Path
 from typing import TYPE_CHECKING
+from unittest.mock import Mock, patch
 
 import pytest
 from fastapi import status
 
 from app.config import settings
-from app.domain.enums import MapGamemode
+from app.domain.enums import MapGamemode, MapKey
 
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
@@ -47,3 +48,18 @@ def test_get_maps_filter_by_gamemode(client: TestClient, gamemode: MapGamemode):
 def test_get_maps_invalid_gamemode(client: TestClient):
     response = client.get("/maps", params={"gamemode": "invalid"})
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+def test_get_maps_serves_csv_when_dropdown_is_gone(client: TestClient):
+    broken_html = "<html><body><main class='main-content'></main></body></html>"
+
+    with patch(
+        "httpx2.AsyncClient.get",
+        return_value=Mock(status_code=status.HTTP_200_OK, text=broken_html),
+    ):
+        response = client.get("/maps")
+
+    assert response.status_code == status.HTTP_200_OK
+    maps = response.json()
+    assert {map_data["key"] for map_data in maps} == {str(m) for m in MapKey}
+    assert all(map_data["competitive"] is None for map_data in maps)

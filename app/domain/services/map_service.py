@@ -13,11 +13,13 @@ class MapService(StaticDataService):
     ) -> StaticFetchConfig:
         """Build a StaticFetchConfig for the maps list.
 
-        The maps list is scraped from the Blizzard hero stats page (the map
-        dropdown is the authoritative competitive map list), enriched with CSV
-        metadata (screenshot, location, country_code) and flagged with a
-        ``competitive`` boolean. The raw HTML is persisted so code changes to
-        the parser take effect on the next request after restart.
+        The local CSV is the authoritative maps list. The Blizzard hero stats
+        page (which hosts the map dropdown) is scraped only to enrich it: it
+        flags which maps are in the competitive rotation and may surface a map
+        the CSV doesn't know about yet. ``parse_maps_html`` degrades to the
+        plain CSV list when the scrape is unusable, so a Blizzard markup change
+        never fails a maps request. The raw HTML is persisted so code changes
+        to the parser take effect on the next request after restart.
         """
 
         async def _fetch() -> str:
