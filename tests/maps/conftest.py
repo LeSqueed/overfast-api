@@ -1,13 +1,9 @@
-from typing import TYPE_CHECKING
 from unittest.mock import Mock, patch
 
 import pytest
 from fastapi import status
 
 from tests.helpers import read_html_file
-
-if TYPE_CHECKING:
-    from _pytest.fixtures import SubRequest
 
 
 @pytest.fixture(scope="package")

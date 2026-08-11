@@ -143,7 +143,7 @@ def parse_hero_stats_json(
     hero_stats.sort(
         key=lambda stat: stat[order_field],
         reverse=(order_arrangement == "desc"),
-    )  # ty: ignore[no-matching-overload]  (mixed str/float keys)
+    )
 
     return hero_stats
 

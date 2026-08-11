@@ -114,7 +114,9 @@ def test_parse_maps_html_new_map_falls_back_to_null(rates_maps_html_data: str):
     assert new_map["screenshot"] is None
 
 
-def test_parse_maps_html_empty_scraped_name_falls_back_to_key(rates_maps_html_data: str):
+def test_parse_maps_html_empty_scraped_name_falls_back_to_key(
+    rates_maps_html_data: str,
+):
     html = rates_maps_html_data.replace(
         'data-title="Suravasa" value="suravasa"',
         'data-title="" value="brand-new-map"',

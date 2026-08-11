@@ -432,7 +432,9 @@ class TestHeroServiceSnapshot:
         svc = _make_hero_service()
         rates_maps_html = read_html_file("rates_map_dropdown.html")
         assert rates_maps_html is not None
-        svc.storage.get_static_data.return_value = {"data": rates_maps_html}
+        cast("Any", svc.storage).get_static_data.return_value = {
+            "data": rates_maps_html
+        }
 
         keys = await svc._competitive_map_keys()
 
@@ -443,7 +445,9 @@ class TestHeroServiceSnapshot:
     @pytest.mark.asyncio
     async def test_competitive_map_keys_handles_bad_stored_data(self):
         svc = _make_hero_service()
-        svc.storage.get_static_data.return_value = {"data": "<not-the-rates-page>"}
+        cast("Any", svc.storage).get_static_data.return_value = {
+            "data": "<not-the-rates-page>"
+        }
 
         keys = await svc._competitive_map_keys()
 
@@ -452,7 +456,7 @@ class TestHeroServiceSnapshot:
     @pytest.mark.asyncio
     async def test_competitive_map_keys_handles_stored_not_a_dict(self):
         svc = _make_hero_service()
-        svc.storage.get_static_data.return_value = "unexpected-cache-value"
+        cast("Any", svc.storage).get_static_data.return_value = "unexpected-cache-value"
 
         keys = await svc._competitive_map_keys()
 
@@ -461,7 +465,9 @@ class TestHeroServiceSnapshot:
     @pytest.mark.asyncio
     async def test_competitive_map_keys_handles_stored_data_not_a_str(self):
         svc = _make_hero_service()
-        svc.storage.get_static_data.return_value = {"data": {"not": "a string"}}
+        cast("Any", svc.storage).get_static_data.return_value = {
+            "data": {"not": "a string"}
+        }
 
         keys = await svc._competitive_map_keys()
 
@@ -470,7 +476,7 @@ class TestHeroServiceSnapshot:
     @pytest.mark.asyncio
     async def test_competitive_map_keys_handles_stored_none(self):
         svc = _make_hero_service()
-        svc.storage.get_static_data.return_value = None
+        cast("Any", svc.storage).get_static_data.return_value = None
 
         keys = await svc._competitive_map_keys()
 
