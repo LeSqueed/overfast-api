@@ -122,6 +122,11 @@ CREATE INDEX IF NOT EXISTS idx_hero_stats_snapshots_captured_at
 -- run only once, on the first startup after the upgrade.
 DO $$
 BEGIN
+    -- Serialize this migration across the app/worker/scheduler replicas, which
+    -- all run schema.sql on startup. Without a lock, two replicas can both pass
+    -- the index-existence guard below and then collide on the DDL.
+    PERFORM pg_advisory_xact_lock(hashtext('overfast:hero_stats_snapshots_unique'));
+
     IF EXISTS (
         SELECT 1 FROM pg_class
         WHERE relname = 'idx_hero_stats_snapshots_unique' AND relkind = 'i'
@@ -130,16 +135,23 @@ BEGIN
     END IF;
 
     -- Keep the first row written for each grid cell; drop later duplicates.
-    DELETE FROM hero_stats_snapshots a
-        USING hero_stats_snapshots b
-    WHERE a.id > b.id
-      AND a.captured_at = b.captured_at
-      AND a.platform = b.platform
-      AND a.gamemode = b.gamemode
-      AND a.region = b.region
-      AND a.map = b.map
-      AND a.tier = b.tier
-      AND a.hero = b.hero;
+    -- Window-function dedup instead of a self-join: a self-join over the
+    -- growing table is O(n^2) and stalls the migration on a large database,
+    -- even when there are no duplicates to remove.
+    DELETE FROM hero_stats_snapshots
+    WHERE id IN (
+        SELECT id
+        FROM (
+            SELECT id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY captured_at, platform, gamemode, region,
+                                    map, tier, hero
+                       ORDER BY id
+                   ) AS rn
+            FROM hero_stats_snapshots
+        ) ranked
+        WHERE rn > 1
+    );
 
     CREATE UNIQUE INDEX idx_hero_stats_snapshots_unique
         ON hero_stats_snapshots (platform, gamemode, region, map, tier, hero, captured_at);

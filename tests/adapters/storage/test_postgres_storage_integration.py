@@ -12,6 +12,7 @@ contributors running the suite without the compose stack are not blocked.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -435,3 +436,58 @@ async def test_delete_old_hero_stats_snapshots_keeps_rows_inside_the_window(
     )
 
     assert [row["hero"] for row in result] == ["genji"]
+
+
+@pytest.mark.asyncio
+async def test_schema_migration_deduplicates_duplicate_grid_rows(
+    pg_storage: PostgresStorage,
+):
+    """Re-running schema.sql dedupes rows written twice and installs the index.
+
+    Regression for the O(n^2) self-join dedup that stalled the migration on a
+    large database: the dedup must remove duplicate grid cells and leave the
+    unique index in place, idempotently on the second run.
+    """
+    async with pg_storage._pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO hero_stats_snapshots
+               (captured_at, platform, gamemode, region, map, tier, hero,
+                pickrate, winrate, banrate)
+               VALUES
+               ($1, 'pc', 'competitive', 'europe', 'busan', 'all', 'ana',
+                5.0, 50.0, 1.0),
+               ($1, 'pc', 'competitive', 'europe', 'busan', 'all', 'ana',
+                6.0, 60.0, 2.0)""",
+            PostgresStorage._to_utc(CAPTURED_AT),
+        )
+    await _run_schema(pg_storage)
+
+    rows = await pg_storage.get_hero_stats_history(
+        platform=PLATFORM, gamemode=GAMEMODE, region="europe", map_="busan"
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["pickrate"] == 5.0  # noqa: PLR2004
+    async with pg_storage._pool.acquire() as conn:
+        index_exists = await conn.fetchval(
+            "SELECT 1 FROM pg_class WHERE relname = 'idx_hero_stats_snapshots_unique'"
+        )
+        query_index_exists = await conn.fetchval(
+            "SELECT 1 FROM pg_class WHERE relname = 'idx_hero_stats_snapshots_query'"
+        )
+    assert index_exists == 1
+    assert query_index_exists is None
+
+    await _run_schema(pg_storage)
+
+
+async def _run_schema(storage: PostgresStorage) -> None:
+    """Apply the schema file again, as the app does on every startup."""
+    schema_sql = _schema_sql()
+    async with storage._pool.acquire() as conn:
+        await conn.execute(schema_sql)
+
+
+def _schema_sql() -> str:
+    """Read the schema file synchronously (pathlib is sync; the caller is async)."""
+    return (Path(__file__).resolve().parents[3] / "app" / "adapters" / "storage" / "schema.sql").read_text()
