@@ -16,6 +16,18 @@ from app.main import app
 from tests.fake_storage import FakeStorage
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Register custom markers.
+
+    The project has no ``[tool.pytest.ini_options]`` section, so this hook is
+    where markers live.
+    """
+    config.addinivalue_line(
+        "markers",
+        'integration: runs against a real PostgreSQL database (deselect with -m "not integration")',
+    )
+
+
 @pytest.fixture(scope="session")
 def client() -> TestClient:
     return TestClient(app)
