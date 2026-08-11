@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.adapters.tasks.worker import (
+    _SNAPSHOT_RUN_LEASE_SECONDS,
+    _claim_and_run_hero_stats_snapshot,
     _run_refresh_task,
     check_new_hero,
     cleanup_stale_players,
@@ -19,6 +21,7 @@ from app.adapters.tasks.worker import (
     snapshot_hero_stats,
 )
 from app.domain.enums import HeroKey, Locale
+from app.domain.services.hero_service import SnapshotRunResult
 
 
 @pytest.fixture(autouse=True)
@@ -210,25 +213,48 @@ class TestRefreshPlayerProfile:
 # ── cleanup_stale_players ─────────────────────────────────────────────────────
 
 
+def _snapshot_result(
+    *,
+    rows_stored: int = 1500,
+    rows_lost: int = 0,
+    combinations_total: int = 100,
+    combinations_failed: int = 0,
+) -> SnapshotRunResult:
+    return SnapshotRunResult(
+        captured_at=1700006400,
+        rows_stored=rows_stored,
+        rows_lost=rows_lost,
+        combinations_total=combinations_total,
+        combinations_failed=combinations_failed,
+    )
+
+
+def _snapshot_mocks(result: SnapshotRunResult | None = None):
+    """A service returning ``result`` and a storage whose run slot is free."""
+    mock_service = AsyncMock()
+    mock_service.snapshot_hero_stats.return_value = result or _snapshot_result()
+    mock_storage = AsyncMock()
+    mock_storage.claim_hero_stats_snapshot_run.return_value = True
+    return mock_service, mock_storage
+
+
 class TestSnapshotHeroStats:
     @pytest.mark.asyncio
     async def test_skipped_when_disabled(self):
-        mock_service = AsyncMock()
-        mock_storage = AsyncMock()
+        mock_service, mock_storage = _snapshot_mocks()
         with patch("app.adapters.tasks.worker.settings") as mock_settings:
             mock_settings.hero_stats_snapshot_enabled = False
             await cast("Any", snapshot_hero_stats).__wrapped__(
                 mock_service, mock_storage
             )
 
+        mock_storage.claim_hero_stats_snapshot_run.assert_not_awaited()
         mock_service.snapshot_hero_stats.assert_not_awaited()
         mock_storage.delete_old_hero_stats_snapshots.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_snapshots_and_prunes(self):
-        mock_service = AsyncMock()
-        mock_service.snapshot_hero_stats.return_value = 1500
-        mock_storage = AsyncMock()
+        mock_service, mock_storage = _snapshot_mocks()
         mock_storage.delete_old_hero_stats_snapshots.return_value = 100
         with patch("app.adapters.tasks.worker.settings") as mock_settings:
             mock_settings.hero_stats_snapshot_enabled = True
@@ -243,9 +269,7 @@ class TestSnapshotHeroStats:
     @pytest.mark.asyncio
     async def test_snapshots_without_pruning_when_max_age_zero(self):
         """Retention is off by default (0) — snapshot history is never deleted."""
-        mock_service = AsyncMock()
-        mock_service.snapshot_hero_stats.return_value = 1500
-        mock_storage = AsyncMock()
+        mock_service, mock_storage = _snapshot_mocks()
         with patch("app.adapters.tasks.worker.settings") as mock_settings:
             mock_settings.hero_stats_snapshot_enabled = True
             mock_settings.hero_stats_snapshot_max_age = 0
@@ -258,9 +282,8 @@ class TestSnapshotHeroStats:
 
     @pytest.mark.asyncio
     async def test_exception_is_swallowed(self):
-        mock_service = AsyncMock()
+        mock_service, mock_storage = _snapshot_mocks()
         mock_service.snapshot_hero_stats.side_effect = Exception("snapshot failed")
-        mock_storage = AsyncMock()
         with patch("app.adapters.tasks.worker.settings") as mock_settings:
             mock_settings.hero_stats_snapshot_enabled = True
             await cast("Any", snapshot_hero_stats).__wrapped__(
@@ -268,6 +291,106 @@ class TestSnapshotHeroStats:
             )
 
         mock_storage.delete_old_hero_stats_snapshots.assert_not_awaited()
+
+
+class TestClaimAndRunHeroStatsSnapshot:
+    @pytest.mark.asyncio
+    async def test_runs_the_slot_it_claimed_and_completes_it(self):
+        mock_service, mock_storage = _snapshot_mocks(
+            _snapshot_result(rows_stored=1500, combinations_failed=3)
+        )
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is True
+        mock_storage.claim_hero_stats_snapshot_run.assert_awaited_once_with(
+            1700006400, _SNAPSHOT_RUN_LEASE_SECONDS
+        )
+        mock_service.snapshot_hero_stats.assert_awaited_once_with(
+            captured_at=1700006400
+        )
+        mock_storage.complete_hero_stats_snapshot_run.assert_awaited_once_with(
+            1700006400, 1500, 3
+        )
+
+    @pytest.mark.asyncio
+    async def test_stands_down_when_the_slot_is_already_claimed(self):
+        mock_service, mock_storage = _snapshot_mocks()
+        mock_storage.claim_hero_stats_snapshot_run.return_value = False
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is False
+        mock_service.snapshot_hero_stats.assert_not_awaited()
+        mock_storage.complete_hero_stats_snapshot_run.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_stands_down_when_claiming_fails(self):
+        mock_service, mock_storage = _snapshot_mocks()
+        mock_storage.claim_hero_stats_snapshot_run.side_effect = OSError("db gone")
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is False
+        mock_service.snapshot_hero_stats.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_leaves_the_slot_unfinished_when_the_run_raises(self):
+        mock_service, mock_storage = _snapshot_mocks()
+        mock_service.snapshot_hero_stats.side_effect = Exception("snapshot failed")
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is False
+        mock_storage.complete_hero_stats_snapshot_run.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_leaves_the_slot_unfinished_when_nothing_was_stored(self):
+        mock_service, mock_storage = _snapshot_mocks(
+            _snapshot_result(rows_stored=0, combinations_failed=100)
+        )
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is False
+        mock_storage.complete_hero_stats_snapshot_run.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_completes_a_partial_run(self):
+        """A grid with holes is still published — it is better than no day at all."""
+        mock_service, mock_storage = _snapshot_mocks(
+            _snapshot_result(rows_stored=900, rows_lost=200, combinations_failed=12)
+        )
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is True
+        mock_storage.complete_hero_stats_snapshot_run.assert_awaited_once_with(
+            1700006400, 900, 12
+        )
+
+    @pytest.mark.asyncio
+    async def test_reports_failure_when_completing_the_slot_fails(self):
+        mock_service, mock_storage = _snapshot_mocks()
+        mock_storage.complete_hero_stats_snapshot_run.side_effect = OSError("db gone")
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is False
 
 
 class TestCleanupStalePlayers:

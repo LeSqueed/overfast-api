@@ -16,8 +16,16 @@ from app.domain.exceptions import (
     ParserInternalError,
     ParserParsingError,
 )
-from app.domain.services.hero_service import HeroService, dict_insert_value_before_key
+from app.domain.services.hero_service import (
+    HERO_STATS_SNAPSHOT_SLOT_SECONDS,
+    HeroService,
+    dict_insert_value_before_key,
+    hero_stats_snapshot_slot,
+)
 from tests.helpers import read_html_file
+
+# An exact UTC-day boundary, so it is its own snapshot slot.
+_SNAPSHOT_SLOT = 1700006400
 
 
 def _make_hero_service() -> HeroService:
@@ -295,6 +303,37 @@ def test_dict_insert_value_before_key_valid(
     assert actual == result_dict
 
 
+class TestHeroStatsSnapshotSlot:
+    """The slot makes every run of one scheduled day agree on a ``captured_at``."""
+
+    def test_boundary_timestamp_is_its_own_slot(self):
+        boundary = _SNAPSHOT_SLOT
+
+        assert hero_stats_snapshot_slot(boundary) == boundary
+
+    @pytest.mark.parametrize("offset", [1, 3600, HERO_STATS_SNAPSHOT_SLOT_SECONDS - 1])
+    def test_any_time_within_a_day_maps_to_that_day(self, offset: int):
+        boundary = _SNAPSHOT_SLOT
+
+        assert hero_stats_snapshot_slot(boundary + offset) == boundary
+
+    def test_next_day_maps_to_the_next_slot(self):
+        boundary = _SNAPSHOT_SLOT
+
+        actual = hero_stats_snapshot_slot(boundary + HERO_STATS_SNAPSHOT_SLOT_SECONDS)
+
+        assert actual == boundary + HERO_STATS_SNAPSHOT_SLOT_SECONDS
+
+    def test_defaults_to_the_slot_covering_now(self):
+        with patch(
+            "app.domain.services.hero_service.time.time",
+            return_value=_SNAPSHOT_SLOT + 3599,
+        ):
+            actual = hero_stats_snapshot_slot()
+
+        assert actual == _SNAPSHOT_SLOT
+
+
 class TestHeroServiceSnapshot:
     @pytest.mark.asyncio
     async def test_snapshot_stores_rows(self):
@@ -311,9 +350,9 @@ class TestHeroServiceSnapshot:
             "app.domain.services.hero_service.parse_hero_stats_summary",
             return_value=[expected_stat],
         ) as mock_parse:
-            count = await svc.snapshot_hero_stats()
+            result = await svc.snapshot_hero_stats()
 
-        assert count > 0
+        assert result.rows_stored > 0
         assert mock_parse.await_count > 0
         cast("Any", svc.storage).store_hero_stats_snapshots.assert_awaited()
         all_rows = [
@@ -352,9 +391,9 @@ class TestHeroServiceSnapshot:
             "app.domain.services.hero_service.parse_hero_stats_summary",
             side_effect=_parse,
         ):
-            count = await svc.snapshot_hero_stats()
+            result = await svc.snapshot_hero_stats()
 
-        assert count > 0
+        assert result.rows_stored > 0
         all_rows = [
             row
             for call in cast(
@@ -382,9 +421,9 @@ class TestHeroServiceSnapshot:
             "app.domain.services.hero_service.parse_hero_stats_summary",
             side_effect=_parse,
         ):
-            count = await svc.snapshot_hero_stats()
+            result = await svc.snapshot_hero_stats()
 
-        assert count > 0
+        assert result.rows_stored > 0
         all_rows = [
             row
             for call in cast(
@@ -405,10 +444,73 @@ class TestHeroServiceSnapshot:
                 "https://blizzard", ValueError("always fails")
             ),
         ):
-            count = await svc.snapshot_hero_stats()
+            result = await svc.snapshot_hero_stats()
 
-        assert count == 0
+        assert result.rows_stored == 0
+        assert result.combinations_failed == result.combinations_total
         cast("Any", svc.storage).store_hero_stats_snapshots.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_snapshot_uses_the_current_slot_by_default(self):
+        svc = _make_hero_service()
+        expected_stat = {"hero": "ana", "pickrate": 5.5, "winrate": 52.3}
+
+        with patch(
+            "app.domain.services.hero_service.parse_hero_stats_summary",
+            return_value=[expected_stat],
+        ):
+            result = await svc.snapshot_hero_stats()
+
+        timestamps = {
+            call.args[0]
+            for call in cast(
+                "Any", svc.storage
+            ).store_hero_stats_snapshots.await_args_list
+        }
+        assert timestamps == {hero_stats_snapshot_slot()}
+        assert result.captured_at == hero_stats_snapshot_slot()
+
+    @pytest.mark.asyncio
+    async def test_snapshot_stores_every_row_under_the_given_slot(self):
+        svc = _make_hero_service()
+        slot = _SNAPSHOT_SLOT
+        expected_stat = {"hero": "ana", "pickrate": 5.5, "winrate": 52.3}
+
+        with patch(
+            "app.domain.services.hero_service.parse_hero_stats_summary",
+            return_value=[expected_stat],
+        ):
+            result = await svc.snapshot_hero_stats(captured_at=slot)
+
+        timestamps = {
+            call.args[0]
+            for call in cast(
+                "Any", svc.storage
+            ).store_hero_stats_snapshots.await_args_list
+        }
+        assert timestamps == {slot}
+        assert result.captured_at == slot
+
+    @pytest.mark.asyncio
+    async def test_snapshot_continues_after_a_failed_flush(self):
+        svc = _make_hero_service()
+        storage = cast("Any", svc.storage)
+        storage.store_hero_stats_snapshots.side_effect = [
+            OSError("connection reset"),
+            *([None] * 1000),
+        ]
+        expected_stat = {"hero": "ana", "pickrate": 5.5, "winrate": 52.3}
+
+        with patch(
+            "app.domain.services.hero_service.parse_hero_stats_summary",
+            return_value=[expected_stat],
+        ):
+            result = await svc.snapshot_hero_stats()
+
+        assert storage.store_hero_stats_snapshots.await_count > 1
+        assert result.rows_lost > 0
+        assert result.rows_stored > 0
+        assert result.combinations_failed == 0
 
     def test_snapshot_grid_uses_competitive_only(self):
         svc = _make_hero_service()

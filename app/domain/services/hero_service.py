@@ -2,6 +2,7 @@
 
 import json
 import time
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
@@ -49,6 +50,39 @@ MAP_KEY_PROBE_REJECTED_TTL = 7 * 24 * 3600
 
 _MAP_KEY_ACCEPTED_VALUE = b"1"
 _MAP_KEY_REJECTED_VALUE = b"0"
+
+# Width of a snapshot slot, in seconds. Every run of the snapshot cron is
+# rounded down to a slot boundary so that repeated, concurrent or resumed runs
+# of the same scheduled tick share one ``captured_at`` and overwrite each
+# other's rows instead of writing a second grid. One day matches the default
+# daily cron (``hero_stats_snapshot_cron``); lower it if the cron is ever set to
+# fire more than once a day.
+HERO_STATS_SNAPSHOT_SLOT_SECONDS = 86400
+
+
+def hero_stats_snapshot_slot(now: float | None = None) -> int:
+    """Return the snapshot slot timestamp covering ``now`` (default: current time)."""
+    reference = int(time.time() if now is None else now)
+    return reference - reference % HERO_STATS_SNAPSHOT_SLOT_SECONDS
+
+
+@dataclass(frozen=True)
+class SnapshotRunResult:
+    """Outcome of one hero stats snapshot run.
+
+    Attributes:
+        captured_at: Slot timestamp shared by every row of the run.
+        rows_stored: Number of rows successfully persisted.
+        rows_lost: Number of rows dropped because a storage flush failed.
+        combinations_total: Number of grid combinations the run walked.
+        combinations_failed: Number of combinations that could not be fetched.
+    """
+
+    captured_at: int
+    rows_stored: int
+    rows_lost: int
+    combinations_total: int
+    combinations_failed: int
 
 
 class HeroService(StaticDataService):
@@ -255,19 +289,30 @@ class HeroService(StaticDataService):
     # Hero stats history  (per-map/per-tier snapshots)
     # ------------------------------------------------------------------
 
-    async def snapshot_hero_stats(self) -> int:
+    async def snapshot_hero_stats(
+        self, captured_at: int | None = None
+    ) -> SnapshotRunResult:
         """Fetch hero pickrate/winrate for the full grid and store snapshots.
 
         Grid: every platform x gamemode x region x map x tier combination.
         Rows are flushed to storage incrementally (per map) so progress is
         persisted even if the run is interrupted, and all rows of a run share
-        the same ``captured_at`` timestamp.
+        the same ``captured_at`` timestamp. Re-running the same slot rewrites
+        those rows rather than appending a second grid, so an interrupted run
+        can simply be run again.
+
+        Args:
+            captured_at: Slot timestamp to store the rows under. Defaults to
+                the slot covering the current time.
 
         Returns:
-            Number of rows stored.
+            The run outcome, including how much of the grid was covered.
         """
-        captured_at = int(time.time())
+        slot = hero_stats_snapshot_slot() if captured_at is None else captured_at
         total_stored = 0
+        total_lost = 0
+        combinations_total = 0
+        combinations_failed = 0
         rows: list[dict] = []
         current_map_key: str | None = None
         map_keys = await self._competitive_map_keys()
@@ -278,8 +323,11 @@ class HeroService(StaticDataService):
             map_key,
             tier,
         ) in self._hero_stats_snapshot_grid(map_keys):
+            combinations_total += 1
             if current_map_key is not None and map_key != current_map_key:
-                total_stored += await self._flush_hero_stats_snapshot(captured_at, rows)
+                stored = await self._flush_hero_stats_snapshot(slot, rows)
+                total_stored += stored
+                total_lost += len(rows) - stored
                 rows = []
             current_map_key = map_key
 
@@ -293,6 +341,7 @@ class HeroService(StaticDataService):
                 ParserBlizzardError,
                 ParserParsingError,
             ) as exc:
+                combinations_failed += 1
                 logger.warning(
                     "[hero-stats-snapshot] Skipping {}/{}/{}/{}/{}: {}",
                     platform,
@@ -320,17 +369,42 @@ class HeroService(StaticDataService):
                     ]
                 )
 
-        if rows:
-            total_stored += await self._flush_hero_stats_snapshot(captured_at, rows)
-        return total_stored
+        stored = await self._flush_hero_stats_snapshot(slot, rows)
+        total_stored += stored
+        total_lost += len(rows) - stored
+
+        return SnapshotRunResult(
+            captured_at=slot,
+            rows_stored=total_stored,
+            rows_lost=total_lost,
+            combinations_total=combinations_total,
+            combinations_failed=combinations_failed,
+        )
 
     async def _flush_hero_stats_snapshot(
         self, captured_at: int, rows: list[dict]
     ) -> int:
-        """Persist one snapshot chunk and log progress."""
+        """Persist one snapshot chunk and log progress.
+
+        A storage failure only costs this chunk: it is reported and 0 rows are
+        returned, so the rest of the run — including the maps already collected
+        — is kept rather than aborting the whole grid walk.
+
+        Returns:
+            Number of rows persisted (0 when the flush failed).
+        """
         if not rows:
             return 0
-        await self.storage.store_hero_stats_snapshots(captured_at, rows)
+        try:
+            await self.storage.store_hero_stats_snapshots(captured_at, rows)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "[hero-stats-snapshot] Failed to store {} rows for timestamp {}: {}",
+                len(rows),
+                captured_at,
+                exc,
+            )
+            return 0
         logger.info(
             "[hero-stats-snapshot] Stored {} rows for timestamp {}",
             len(rows),

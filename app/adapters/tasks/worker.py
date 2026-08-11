@@ -52,6 +52,7 @@ from app.domain.services import (
     PlayerService,
     RoleService,
 )
+from app.domain.services.hero_service import hero_stats_snapshot_slot
 from app.infrastructure.helpers import send_discord_webhook_message
 from app.infrastructure.logger import logger
 from app.monitoring.metrics import (
@@ -218,10 +219,99 @@ async def refresh_player_profile(
 
 # ─── Cron tasks ───────────────────────────────────────────────────────────────
 
+# How long a claimed snapshot run stays reserved before another worker may
+# resume it. It must comfortably exceed a normal run (a full grid is thousands
+# of throttled Blizzard calls) while still letting a later run take over after a
+# crash — hence a value between a long run and the daily cron period.
+_SNAPSHOT_RUN_LEASE_SECONDS = 6 * 3600
+
+
+async def _claim_and_run_hero_stats_snapshot(
+    service: HeroService, storage: StoragePort, captured_at: int
+) -> bool:
+    """Claim the snapshot run slot, fill it, and mark it completed.
+
+    Returns:
+        True when the run reached the end of the grid and the slot was marked
+        completed, False when the slot was already taken or the run failed.
+    """
+    try:
+        claimed = await storage.claim_hero_stats_snapshot_run(
+            captured_at, _SNAPSHOT_RUN_LEASE_SECONDS
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("[Worker] snapshot_hero_stats: Failed to claim run slot.")
+        return False
+
+    if not claimed:
+        logger.warning(
+            "[Worker] snapshot_hero_stats: Slot {} is already claimed by another "
+            "run, skipping.",
+            captured_at,
+        )
+        return False
+
+    logger.info(
+        "[Worker] snapshot_hero_stats: Starting hero stats snapshot for slot {}...",
+        captured_at,
+    )
+    try:
+        result = await service.snapshot_hero_stats(captured_at=captured_at)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "[Worker] snapshot_hero_stats: Failed — slot {} left unfinished.",
+            captured_at,
+        )
+        return False
+
+    if result.rows_stored == 0:
+        logger.error(
+            "[Worker] snapshot_hero_stats: Stored 0 rows for slot {} — the whole "
+            "snapshot was lost ({}/{} combinations failed). Slot left unfinished.",
+            captured_at,
+            result.combinations_failed,
+            result.combinations_total,
+        )
+        return False
+
+    if result.combinations_failed or result.rows_lost:
+        logger.warning(
+            "[Worker] snapshot_hero_stats: Incomplete grid for slot {} — {}/{} "
+            "combinations failed and {} rows were lost on flush.",
+            captured_at,
+            result.combinations_failed,
+            result.combinations_total,
+            result.rows_lost,
+        )
+
+    try:
+        await storage.complete_hero_stats_snapshot_run(
+            captured_at, result.rows_stored, result.combinations_failed
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "[Worker] snapshot_hero_stats: Failed to mark slot {} completed.",
+            captured_at,
+        )
+        return False
+
+    logger.info(
+        "[Worker] snapshot_hero_stats: Stored {} snapshot rows for slot {}.",
+        result.rows_stored,
+        captured_at,
+    )
+    return True
+
 
 @broker.task(schedule=[{"cron": settings.hero_stats_snapshot_cron}])
 async def snapshot_hero_stats(service: HeroServiceDep, storage: StorageDep) -> None:
     """Fetch and store the full hero stats snapshot grid (runs on a cron schedule).
+
+    The run slot is claimed before any work starts, so a second scheduler
+    replica, a taskiq redelivery or a manual re-run stands down instead of
+    writing a second grid. The slot is only marked completed once the whole grid
+    has been walked; a crashed run stays unfinished and is therefore hidden from
+    the history dates endpoint until a later run resumes it.
 
     Also prunes snapshots older than ``hero_stats_snapshot_max_age``.
     """
@@ -229,14 +319,11 @@ async def snapshot_hero_stats(service: HeroServiceDep, storage: StorageDep) -> N
         logger.debug("[Worker] snapshot_hero_stats: disabled, skipping.")
         return
 
-    logger.info("[Worker] snapshot_hero_stats: Starting hero stats snapshot...")
-    try:
-        rows_stored = await service.snapshot_hero_stats()
-    except Exception:  # noqa: BLE001
-        logger.exception("[Worker] snapshot_hero_stats: Failed.")
+    completed = await _claim_and_run_hero_stats_snapshot(
+        service, storage, hero_stats_snapshot_slot()
+    )
+    if not completed:
         return
-
-    logger.info("[Worker] snapshot_hero_stats: Stored {} snapshot rows.", rows_stored)
 
     if settings.hero_stats_snapshot_max_age > 0:
         try:
