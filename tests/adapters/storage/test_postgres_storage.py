@@ -10,7 +10,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.adapters.storage.postgres_storage import PostgresStorage
-from app.domain.ports.storage import StaticDataCategory
+from app.domain.ports.storage import (
+    MAX_HERO_STATS_HISTORY_ROWS,
+    StaticDataCategory,
+)
 
 
 def _make_connection(fetchrow_result=None, fetch_result=None):
@@ -435,6 +438,23 @@ class TestGetStats:
         assert result["player_profile_age_p99"] == 0
 
     @pytest.mark.asyncio
+    async def test_size_bytes_covers_every_stored_table(self):
+        pool, conn = _make_pool()
+        conn.fetchrow = AsyncMock(return_value={"n": 0, "total": 0})
+        conn.fetch = AsyncMock(return_value=[])
+        storage = _make_storage(pool=pool)
+
+        await storage.get_stats()
+
+        size_call_params = conn.fetchrow.call_args[0][1]
+
+        assert sorted(size_call_params) == [
+            "hero_stats_snapshots",
+            "player_profiles",
+            "static_data",
+        ]
+
+    @pytest.mark.asyncio
     async def test_exception_returns_zeroed_stats(self):
         """DB errors are swallowed and return zeroed stats."""
         pool, conn = _make_pool()
@@ -586,11 +606,8 @@ class TestGetHeroStatsHistory:
             until=1700001000,
         )
 
-        query = conn.fetch.call_args[0][0]
         args = list(conn.fetch.call_args[0][1:])
-        assert "captured_at >= TO_TIMESTAMP($7)" in query
-        assert "captured_at <= TO_TIMESTAMP($8)" in query
-        assert "hero = ANY($6::text[])" in query
+
         assert args == [
             "pc",
             "competitive",
@@ -600,10 +617,11 @@ class TestGetHeroStatsHistory:
             ["ana"],
             1700000000,
             1700001000,
+            MAX_HERO_STATS_HISTORY_ROWS,
         ]
 
     @pytest.mark.asyncio
-    async def test_optional_filters_build_dynamic_query(self):
+    async def test_optional_filters_are_omitted_from_params(self):
         conn = _make_connection(fetch_result=[])
         pool, _ = _make_pool(conn=conn)
         storage = _make_storage(pool=pool)
@@ -615,15 +633,15 @@ class TestGetHeroStatsHistory:
             until=1700001000,
         )
 
-        query = conn.fetch.call_args[0][0]
         args = list(conn.fetch.call_args[0][1:])
-        assert "region = $" not in query
-        assert "map = $" not in query
-        assert "tier = $" not in query
-        assert "hero = $" not in query
-        assert "captured_at >= TO_TIMESTAMP($3)" in query
-        assert "captured_at <= TO_TIMESTAMP($4)" in query
-        assert args == ["pc", "competitive", 1700000000, 1700001000]
+
+        assert args == [
+            "pc",
+            "competitive",
+            1700000000,
+            1700001000,
+            MAX_HERO_STATS_HISTORY_ROWS,
+        ]
 
     @pytest.mark.asyncio
     async def test_filters_by_multiple_heroes(self):
@@ -637,10 +655,70 @@ class TestGetHeroStatsHistory:
             heroes=["ana", "genji", "reinhardt"],
         )
 
+        args = list(conn.fetch.call_args[0][1:])
+
+        assert args == [
+            "pc",
+            "competitive",
+            ["ana", "genji", "reinhardt"],
+            MAX_HERO_STATS_HISTORY_ROWS,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_empty_heroes_list_applies_no_hero_filter(self):
+        conn = _make_connection(fetch_result=[])
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        await storage.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            heroes=[],
+        )
+
+        args = list(conn.fetch.call_args[0][1:])
+
+        assert args == ["pc", "competitive", MAX_HERO_STATS_HISTORY_ROWS]
+
+    @pytest.mark.asyncio
+    async def test_caps_unbounded_query_with_default_limit(self):
+        conn = _make_connection(fetch_result=[])
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        await storage.get_hero_stats_history(platform="pc", gamemode="competitive")
+
         query = conn.fetch.call_args[0][0]
         args = list(conn.fetch.call_args[0][1:])
-        assert "hero = ANY($3::text[])" in query
-        assert args == ["pc", "competitive", ["ana", "genji", "reinhardt"]]
+
+        assert query.endswith("LIMIT $3")
+        assert args[-1] == MAX_HERO_STATS_HISTORY_ROWS
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("limit", "expected"),
+        [
+            (100, 100),
+            (MAX_HERO_STATS_HISTORY_ROWS + 1, MAX_HERO_STATS_HISTORY_ROWS),
+            (10**9, MAX_HERO_STATS_HISTORY_ROWS),
+            (0, 1),
+            (-5, 1),
+        ],
+    )
+    async def test_limit_is_clamped_to_ceiling(self, limit: int, expected: int):
+        conn = _make_connection(fetch_result=[])
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        await storage.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            limit=limit,
+        )
+
+        args = list(conn.fetch.call_args[0][1:])
+
+        assert args[-1] == expected
 
 
 class TestGetHeroStatsHistoryDates:

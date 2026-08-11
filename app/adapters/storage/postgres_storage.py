@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import asyncpg
 
 from app.config import settings
+from app.domain.ports.storage import MAX_HERO_STATS_HISTORY_ROWS
 from app.infrastructure.logger import logger
 from app.infrastructure.metaclasses import Singleton
 from app.monitoring.metrics import (
@@ -24,6 +25,11 @@ if TYPE_CHECKING:
     from app.domain.ports.storage import StaticDataCategory
 
 _SCHEMA_SQL = (Path(__file__).parent / "schema.sql").read_text()
+
+# Tables whose on-disk footprint is reported by ``get_stats``.
+_SIZED_TABLES = ["player_profiles", "static_data", "hero_stats_snapshots"]
+
+type _QueryParam = str | int | list[str]
 
 
 class PostgresStorage(metaclass=Singleton):
@@ -292,9 +298,8 @@ class PostgresStorage(metaclass=Singleton):
                 ],
             )
 
-    @track_storage_operation("hero_stats_snapshots", "get")
-    async def get_hero_stats_history(
-        self,
+    @staticmethod
+    def _build_snapshot_filters(
         platform: str,
         gamemode: str,
         region: str | None = None,
@@ -303,19 +308,16 @@ class PostgresStorage(metaclass=Singleton):
         heroes: list[str] | None = None,
         since: int | None = None,
         until: int | None = None,
-    ) -> list[dict]:
-        """Get hero stats history for a filter combination.
+    ) -> tuple[list[str], list[_QueryParam]]:
+        """Build the WHERE conditions and bind parameters for snapshot queries.
 
-        ``platform`` and ``gamemode`` are required. ``region``, ``map_``,
-        ``tier`` and ``heroes`` are optional filters. ``heroes`` accepts a list
-        of hero keys and matches any of them. ``since``/``until`` bound
-        ``captured_at``.
+        An empty ``heroes`` list means "no hero filter", same as ``None``.
 
-        Returns list of dicts with 'captured_at' (int Unix ts), 'platform',
-        'gamemode', 'region', 'map', 'tier', 'hero', 'pickrate', 'winrate',
-        ordered by captured_at ascending.
+        Returns:
+            Tuple of (conditions, params); conditions use ``$n`` placeholders
+            matching the position of each param.
         """
-        params: list = [platform, gamemode]
+        params: list[_QueryParam] = [platform, gamemode]
         conditions = ["platform = $1", "gamemode = $2"]
         if region is not None:
             params.append(region)
@@ -335,13 +337,62 @@ class PostgresStorage(metaclass=Singleton):
         if until is not None:
             params.append(until)
             conditions.append(f"captured_at <= TO_TIMESTAMP(${len(params)})")
+        return conditions, params
+
+    @staticmethod
+    def _clamp_history_limit(limit: int | None) -> int:
+        """Clamp a caller-supplied row limit to ``1..MAX_HERO_STATS_HISTORY_ROWS``."""
+        if limit is None:
+            return MAX_HERO_STATS_HISTORY_ROWS
+        return max(1, min(limit, MAX_HERO_STATS_HISTORY_ROWS))
+
+    @track_storage_operation("hero_stats_snapshots", "get")
+    async def get_hero_stats_history(
+        self,
+        platform: str,
+        gamemode: str,
+        region: str | None = None,
+        map_: str | None = None,
+        tier: str | None = None,
+        heroes: list[str] | None = None,
+        since: int | None = None,
+        until: int | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """Get hero stats history for a filter combination.
+
+        ``platform`` and ``gamemode`` are required. ``region``, ``map_``,
+        ``tier`` and ``heroes`` are optional filters. ``heroes`` accepts a list
+        of hero keys and matches any of them; ``None`` and an empty list both
+        mean "no hero filter". ``since``/``until`` bound ``captured_at``.
+
+        ``limit`` is clamped to ``1..MAX_HERO_STATS_HISTORY_ROWS`` and pushed
+        into the query as a ``LIMIT``, so the result set is always bounded even
+        when only ``platform`` and ``gamemode`` are given.
+
+        Returns list of dicts with 'captured_at' (int Unix ts), 'platform',
+        'gamemode', 'region', 'map', 'tier', 'hero', 'pickrate', 'winrate',
+        ordered by captured_at, map, tier then hero, all ascending.
+        """
+        conditions, params = self._build_snapshot_filters(
+            platform=platform,
+            gamemode=gamemode,
+            region=region,
+            map_=map_,
+            tier=tier,
+            heroes=heroes,
+            since=since,
+            until=until,
+        )
+        params.append(self._clamp_history_limit(limit))
 
         where_clause = " AND ".join(conditions)
         query = (
             "SELECT captured_at, platform, gamemode, region, map, tier, hero, "  # noqa: S608
             "pickrate, winrate, banrate FROM hero_stats_snapshots "
             f"WHERE {where_clause} "
-            "ORDER BY captured_at ASC, map ASC, tier ASC, hero ASC"
+            "ORDER BY captured_at ASC, map ASC, tier ASC, hero ASC "
+            f"LIMIT ${len(params)}"
         )
 
         async with self._pool.acquire() as conn:  # type: ignore[union-attr]
@@ -376,17 +427,13 @@ class PostgresStorage(metaclass=Singleton):
 
         Returns list of int Unix timestamps, most recent first.
         """
-        params: list = [platform, gamemode]
-        conditions = ["platform = $1", "gamemode = $2"]
-        if region is not None:
-            params.append(region)
-            conditions.append(f"region = ${len(params)}")
-        if map_ is not None:
-            params.append(map_)
-            conditions.append(f"map = ${len(params)}")
-        if tier is not None:
-            params.append(tier)
-            conditions.append(f"tier = ${len(params)}")
+        conditions, params = self._build_snapshot_filters(
+            platform=platform,
+            gamemode=gamemode,
+            region=region,
+            map_=map_,
+            tier=tier,
+        )
 
         where_clause = " AND ".join(conditions)
         query = (
@@ -481,8 +528,10 @@ class PostgresStorage(metaclass=Singleton):
 
                 # Approximate disk size via pg_total_relation_size
                 row = await conn.fetchrow(
-                    """SELECT pg_total_relation_size('player_profiles')
-                            + pg_total_relation_size('static_data') AS total"""
+                    """SELECT COALESCE(SUM(pg_total_relation_size(t.name::regclass)), 0)
+                              AS total
+                       FROM unnest($1::text[]) AS t(name)""",
+                    _SIZED_TABLES,
                 )
                 stats["size_bytes"] = row["total"] or 0
 

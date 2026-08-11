@@ -163,6 +163,27 @@ class TestStorageStats:
         assert "size_bytes" in stats
 
     @pytest.mark.asyncio
+    async def test_get_stats_counts_hero_stats_snapshots(self, storage_db):
+        rows = [
+            {
+                "platform": "pc",
+                "gamemode": "competitive",
+                "region": "europe",
+                "map": "busan",
+                "tier": "all",
+                "hero": hero,
+                "pickrate": 5.0,
+                "winrate": 50.0,
+            }
+            for hero in ("ana", "genji")
+        ]
+        await storage_db.store_hero_stats_snapshots(1700000001, rows)
+
+        stats = await storage_db.get_stats()
+
+        assert stats["hero_stats_snapshots_count"] == 2  # noqa: PLR2004
+
+    @pytest.mark.asyncio
     async def test_get_stats_empty_database(self, storage_db):
         stats = await storage_db.get_stats()
         assert stats["static_data_count"] == 0
@@ -277,6 +298,92 @@ class TestHeroStatsSnapshots:
         )
 
         assert {r["hero"] for r in result} == {"ana", "genji"}
+
+    @pytest.mark.asyncio
+    async def test_history_empty_heroes_list_returns_every_hero(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(
+            1700000001,
+            [{**base}, {**base, "hero": "genji"}, {**base, "hero": "mercy"}],
+        )
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            heroes=[],
+        )
+
+        assert {r["hero"] for r in result} == {"ana", "genji", "mercy"}
+
+    @pytest.mark.asyncio
+    async def test_history_ordered_by_captured_at_map_tier_hero(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "gold",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(
+            1700000002,
+            [
+                {**base, "map": "dorado", "tier": "gold", "hero": "ana"},
+                {**base, "map": "busan", "tier": "silver", "hero": "ana"},
+                {**base, "map": "busan", "tier": "gold", "hero": "zenyatta"},
+                {**base, "map": "busan", "tier": "gold", "hero": "ana"},
+            ],
+        )
+        await storage_db.store_hero_stats_snapshots(
+            1700000001, [{**base, "map": "dorado", "tier": "silver", "hero": "mercy"}]
+        )
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+        )
+
+        assert [(r["captured_at"], r["map"], r["tier"], r["hero"]) for r in result] == [
+            (1700000001, "dorado", "silver", "mercy"),
+            (1700000002, "busan", "gold", "ana"),
+            (1700000002, "busan", "gold", "zenyatta"),
+            (1700000002, "busan", "silver", "ana"),
+            (1700000002, "dorado", "gold", "ana"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_history_limit_caps_returned_rows(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        for captured_at in (1700000001, 1700000002, 1700000003):
+            await storage_db.store_hero_stats_snapshots(captured_at, [{**base}])
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            limit=2,
+        )
+
+        assert [r["captured_at"] for r in result] == [1700000001, 1700000002]
 
     @pytest.mark.asyncio
     async def test_history_dates_returns_distinct_desc(self, storage_db):

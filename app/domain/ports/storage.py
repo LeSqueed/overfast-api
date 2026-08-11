@@ -14,6 +14,13 @@ class StaticDataCategory(StrEnum):
     ROLES = "roles"
 
 
+# Server-side ceiling on the number of rows any single hero stats history
+# query may return. The snapshot table grows without bound (retention is
+# disabled by default), and every returned row is materialised in memory, so
+# implementations must clamp the caller-supplied limit to this value.
+MAX_HERO_STATS_HISTORY_ROWS = 50000
+
+
 class StoragePort(Protocol):
     """Protocol for persistent storage operations.
 
@@ -109,18 +116,26 @@ class StoragePort(Protocol):
         heroes: list[str] | None = None,
         since: int | None = None,
         until: int | None = None,
+        limit: int | None = None,
     ) -> list[dict]:
         """Get hero stats history for a given filter combination.
 
         ``platform`` and ``gamemode`` are required; ``region``, ``map_``,
         ``tier`` and ``heroes`` are optional filters. ``heroes`` accepts a list
-        of hero keys and matches any of them. ``since``/``until`` are
-        optional Unix timestamps bounding ``captured_at``.
+        of hero keys and matches any of them; ``None`` **and an empty list both
+        mean "no hero filter"** (every hero is returned). ``since``/``until``
+        are optional Unix timestamps bounding ``captured_at``.
+
+        ``limit`` caps the number of returned rows. It is clamped to
+        ``1..MAX_HERO_STATS_HISTORY_ROWS``; ``None`` means
+        ``MAX_HERO_STATS_HISTORY_ROWS``. The ceiling is always enforced, so no
+        caller can ask for an unbounded result set — callers that need a
+        smaller page (e.g. an API query parameter) simply pass their own value.
 
         Returns list of dicts with ``captured_at`` (int Unix ts), ``platform``,
         ``gamemode``, ``region``, ``map``, ``tier``, ``hero``, ``pickrate``,
         ``winrate``, and optional ``banrate`` (None when unavailable), ordered
-        by ``captured_at`` ascending.
+        by ``captured_at``, ``map``, ``tier`` then ``hero``, all ascending.
         """
         ...
 
@@ -160,7 +175,8 @@ class StoragePort(Protocol):
         Get storage statistics for monitoring.
 
         Returns dict with size_bytes, static_data_count,
-        player_profiles_count, player_profile_age_p50/p90/p99.
+        player_profiles_count, hero_stats_snapshots_count,
+        player_profile_age_p50/p90/p99.
         """
         ...
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+from app.domain.ports.storage import MAX_HERO_STATS_HISTORY_ROWS
+
 if TYPE_CHECKING:
     from app.domain.ports.storage import StaticDataCategory
 
@@ -118,6 +120,7 @@ class FakeStorage:
         heroes: list[str] | None = None,
         since: int | None = None,
         until: int | None = None,
+        limit: int | None = None,
     ) -> list[dict]:
         matching = [
             row
@@ -127,11 +130,18 @@ class FakeStorage:
             and (region is None or row["region"] == region)
             and (map_ is None or row["map"] == map_)
             and (tier is None or row["tier"] == tier)
-            and (heroes is None or row["hero"] in heroes)
+            and (not heroes or row["hero"] in heroes)
             and (since is None or row["captured_at"] >= since)
             and (until is None or row["captured_at"] <= until)
         ]
-        matching.sort(key=lambda row: row["captured_at"])
+        matching.sort(
+            key=lambda row: (row["captured_at"], row["map"], row["tier"], row["hero"])
+        )
+        effective_limit = (
+            MAX_HERO_STATS_HISTORY_ROWS
+            if limit is None
+            else max(1, min(limit, MAX_HERO_STATS_HISTORY_ROWS))
+        )
         return [
             {
                 "captured_at": row["captured_at"],
@@ -145,7 +155,7 @@ class FakeStorage:
                 "winrate": row["winrate"],
                 "banrate": row.get("banrate"),
             }
-            for row in matching
+            for row in matching[:effective_limit]
         ]
 
     async def get_hero_stats_history_dates(
