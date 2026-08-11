@@ -128,7 +128,7 @@ def extract_map_dropdown(html: str) -> str | None:
     """
     dropdown = LexborHTMLParser(html).css_first("div#herostats-filter-map")
     if dropdown is None:
-        logger.warning(
+        logger.error(
             "Map filter dropdown (div#herostats-filter-map) not found in rates page"
         )
         return None
