@@ -721,6 +721,7 @@ class TestGetHeroStatsHistory:
             1700000000,
             1700001000,
             MAX_HERO_STATS_HISTORY_ROWS,
+            0,
         ]
 
     @pytest.mark.asyncio
@@ -744,6 +745,7 @@ class TestGetHeroStatsHistory:
             1700000000,
             1700001000,
             MAX_HERO_STATS_HISTORY_ROWS,
+            0,
         ]
 
     @pytest.mark.asyncio
@@ -765,6 +767,7 @@ class TestGetHeroStatsHistory:
             "competitive",
             ["ana", "genji", "reinhardt"],
             MAX_HERO_STATS_HISTORY_ROWS,
+            0,
         ]
 
     @pytest.mark.asyncio
@@ -781,7 +784,7 @@ class TestGetHeroStatsHistory:
 
         args = list(conn.fetch.call_args[0][1:])
 
-        assert args == ["pc", "competitive", MAX_HERO_STATS_HISTORY_ROWS]
+        assert args == ["pc", "competitive", MAX_HERO_STATS_HISTORY_ROWS, 0]
 
     @pytest.mark.asyncio
     async def test_caps_unbounded_query_with_default_limit(self):
@@ -794,8 +797,8 @@ class TestGetHeroStatsHistory:
         query = conn.fetch.call_args[0][0]
         args = list(conn.fetch.call_args[0][1:])
 
-        assert query.endswith("LIMIT $3")
-        assert args[-1] == MAX_HERO_STATS_HISTORY_ROWS
+        assert query.endswith("LIMIT $3 OFFSET $4")
+        assert args[-2] == MAX_HERO_STATS_HISTORY_ROWS
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -821,7 +824,59 @@ class TestGetHeroStatsHistory:
 
         args = list(conn.fetch.call_args[0][1:])
 
-        assert args[-1] == expected
+        assert args[-2] == expected
+
+    @pytest.mark.asyncio
+    async def test_offset_is_pushed_down_as_a_query_offset(self):
+        conn = _make_connection(fetch_result=[])
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        await storage.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            limit=100,
+            offset=250,
+        )
+
+        query = conn.fetch.call_args[0][0]
+        args = list(conn.fetch.call_args[0][1:])
+
+        assert query.endswith("LIMIT $3 OFFSET $4")
+        assert args == ["pc", "competitive", 100, 250]
+
+    @pytest.mark.asyncio
+    async def test_offset_beyond_the_row_ceiling_is_not_clamped(self):
+        conn = _make_connection(fetch_result=[])
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        await storage.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            offset=MAX_HERO_STATS_HISTORY_ROWS * 10,
+        )
+
+        args = list(conn.fetch.call_args[0][1:])
+
+        assert args[-1] == MAX_HERO_STATS_HISTORY_ROWS * 10
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("offset", [0, -1, -1000])
+    async def test_negative_offset_is_clamped_to_zero(self, offset: int):
+        conn = _make_connection(fetch_result=[])
+        pool, _ = _make_pool(conn=conn)
+        storage = _make_storage(pool=pool)
+
+        await storage.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            offset=offset,
+        )
+
+        args = list(conn.fetch.call_args[0][1:])
+
+        assert args[-1] == 0
 
 
 class TestGetHeroStatsHistoryDates:

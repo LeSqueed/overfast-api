@@ -742,4 +742,37 @@ class TestHeroServiceHistory:
             since=1700000000,
             until=1700001000,
             limit=None,
+            offset=0,
         )
+
+    @pytest.mark.asyncio
+    async def test_get_history_pages_natively_instead_of_over_fetching(self):
+        svc = _make_hero_service()
+        cast("Any", svc.storage).get_hero_stats_history.return_value = []
+
+        await svc.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            limit=100,
+            offset=900,
+        )
+
+        call = cast("Any", svc.storage).get_hero_stats_history.await_args
+
+        assert call.kwargs["limit"] == 100  # noqa: PLR2004
+        assert call.kwargs["offset"] == 900  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_get_history_returns_the_storage_page_verbatim(self):
+        svc = _make_hero_service()
+        rows = [{"captured_at": 1700000000, "hero": "mercy"}]
+        cast("Any", svc.storage).get_hero_stats_history.return_value = rows
+
+        result = await svc.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            limit=1,
+            offset=1000,
+        )
+
+        assert result == rows

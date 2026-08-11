@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from app.config import settings
 from app.domain.enums import (
     CompetitiveDivisionFilter,
+    CompetitiveDivisionHistoryFilter,
     Locale,
     MapKey,
     PlayerGamemode,
@@ -428,12 +429,9 @@ class HeroService(StaticDataService):
     ) -> list[dict]:
         """Return historical pickrate/winrate snapshots matching the filters.
 
-        Storage has no offset of its own, so a page is taken by asking it for
-        ``offset + limit`` rows — the ordering it guarantees is total — and
-        dropping the first ``offset``. Storage clamps that request to
-        ``MAX_HERO_STATS_HISTORY_ROWS``, which is therefore also how deep
-        paging can go; callers are expected to reject deeper pages up front
-        rather than silently receive an empty one.
+        Paging is pushed down to storage, whose ordering is total, so a page is
+        a plain ``limit``/``offset`` query: no row is fetched to be discarded,
+        and every stored row is reachable however deep the page.
 
         Args:
             platform: Platform value (e.g. "pc").
@@ -445,14 +443,14 @@ class HeroService(StaticDataService):
             since: Optional lower bound (Unix ts).
             until: Optional upper bound (Unix ts).
             limit: Optional page size. None means the storage ceiling.
-            offset: Number of leading rows to skip.
+            offset: Number of leading rows storage should skip.
             cache_key: Optional API cache key to populate with the result.
 
         Returns:
             List of dicts with captured_at, platform, gamemode, region, map,
             tier, hero, pickrate, winrate.
         """
-        rows = await self.storage.get_hero_stats_history(
+        page = await self.storage.get_hero_stats_history(
             platform=platform,
             gamemode=gamemode,
             region=region,
@@ -461,9 +459,9 @@ class HeroService(StaticDataService):
             heroes=heroes,
             since=since,
             until=until,
-            limit=None if limit is None else offset + limit,
+            limit=limit,
+            offset=offset,
         )
-        page = rows[offset:] if offset else rows
         await self._cache_history_response(cache_key, page)
         return page
 
@@ -512,23 +510,28 @@ class HeroService(StaticDataService):
         nginx serves whatever it finds under that key verbatim, without
         consulting the app, so an empty result is deliberately *not* cached: a
         window that has no data yet must not keep answering "no data" for the
-        whole TTL, including after the daily snapshot fills it in.
+        whole TTL, including after the daily snapshot fills it in. That TTL is
+        the multi-hour history timeout, not the hourly live-stats one, which
+        makes swallowing an empty result correspondingly more important.
         """
         if not cache_key or not data:
             return
-        await self._update_api_cache(cache_key, data, settings.hero_stats_cache_timeout)
+        await self._update_api_cache(
+            cache_key, data, settings.hero_stats_history_cache_timeout
+        )
 
     def _hero_stats_snapshot_grid(self, map_keys: list[str]) -> list[tuple]:
         """Build the full snapshot grid: platform x gamemode x region x map x tier.
 
-        Only competitive gamemode is tracked per product decision. Tiers include
-        "all" plus every CompetitiveDivisionFilter value.
+        Only competitive gamemode is tracked per product decision. Tiers are
+        every CompetitiveDivisionHistoryFilter value, which is exactly the
+        domain the history endpoints accept as a `competitive_division` filter.
 
         Args:
             map_keys: Competitive map keys to snapshot (from the scraped maps
                 list, or the CSV MapKey enum as a fallback).
         """
-        tiers = ["all", *[tier.value for tier in CompetitiveDivisionFilter]]
+        tiers = [tier.value for tier in CompetitiveDivisionHistoryFilter]
         grid: list[tuple] = []
         for platform in PlayerPlatform:
             for region in PlayerRegion:

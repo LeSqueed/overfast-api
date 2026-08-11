@@ -171,6 +171,15 @@ class Settings(BaseSettings):
     # Cache TTL for hero stats data (seconds)
     hero_stats_cache_timeout: int = 3600
 
+    # Cache TTL for hero stats history data (seconds), used by the history and
+    # dates endpoints. Their source is the snapshot table, which only changes
+    # when the daily snapshot cron runs, so caching for an hour like the live
+    # stats above would rescan storage ~24 times per actual change. Set to a
+    # quarter of the snapshot period rather than the full day: the TTL is a hard
+    # expiry, so it also bounds how long a freshly written snapshot stays
+    # invisible to clients polling /heroes/stats/dates.
+    hero_stats_history_cache_timeout: int = 21600
+
     ############
     # HERO STATS SNAPSHOTS
     ############

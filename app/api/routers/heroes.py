@@ -1,7 +1,7 @@
 """Heroes endpoints router : heroes list, heroes details, etc."""
 
 import time
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response, status
 
@@ -24,6 +24,7 @@ from app.api.models.heroes import (
 from app.config import settings
 from app.domain.enums import (
     CompetitiveDivisionFilter,
+    CompetitiveDivisionHistoryFilter,
     HeroGamemode,
     Locale,
     PlayerGamemode,
@@ -57,6 +58,15 @@ DEFAULT_HISTORY_LIMIT = 1000
 # future releases, while a repeated `heroes` parameter can't be used to build an
 # arbitrarily large bind parameter.
 MAX_HISTORY_HEROES = 100
+
+# Deepest row a single page may start at. Storage pages natively, so every
+# stored row is reachable and this is purely a cost bound: PostgreSQL still
+# walks and discards every skipped row, so an unbounded `offset` would let one
+# request scan the whole table. A query already fixes platform and gamemode,
+# leaving roughly 25k rows per day across regions x maps x divisions x heroes,
+# so a million rows is well over a month of paging before narrowing the window
+# with `since`/`until` becomes the cheaper way to reach further back.
+MAX_HISTORY_OFFSET = 1_000_000
 
 # 2100-01-01T00:00:00Z. Beyond any plausible snapshot, and small enough that
 # PostgreSQL's TO_TIMESTAMP() never overflows on the way to the query.
@@ -94,26 +104,6 @@ def _resolve_history_since(since: int | None, until: int | None) -> int:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, msg)
 
     return since
-
-
-def _validate_history_paging(limit: int, offset: int) -> None:
-    """Reject pages that reach past the server-side row ceiling.
-
-    Storage caps every history query at ``MAX_HERO_STATS_HISTORY_ROWS`` rows, so
-    a page starting beyond that ceiling could only ever come back empty — which
-    is indistinguishable from "no data". Say so explicitly instead.
-
-    Raises:
-        HTTPException: 400 if ``offset + limit`` exceeds the ceiling.
-    """
-    if offset + limit > MAX_HERO_STATS_HISTORY_ROWS:
-        msg = (
-            f"'offset' + 'limit' ({offset} + {limit}) must not exceed "
-            f"{MAX_HERO_STATS_HISTORY_ROWS}, the maximum number of rows a "
-            "single history query may reach. Narrow the window using "
-            "'since'/'until' or add more filters."
-        )
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, msg)
 
 
 @router.get(
@@ -269,7 +259,7 @@ async def get_hero_stats(
         f"`since` only the last {DEFAULT_HISTORY_WINDOW // 86400} days (ending "
         "at `until`, when given) are considered. Page through older or larger "
         "ranges with `offset` and an explicit `since`."
-        f"<br />**Cache TTL : {get_human_readable_duration(settings.hero_stats_cache_timeout)}.**"
+        f"<br />**Cache TTL : {get_human_readable_duration(settings.hero_stats_history_cache_timeout)}.**"
     ),
     operation_id="get_hero_stats_history",
     response_model=list[HeroStatsHistoryPoint],
@@ -307,7 +297,7 @@ async def get_hero_stats_history(
         ),
     ] = None,
     competitive_division: Annotated[
-        CompetitiveDivisionFilter | Literal["all"] | None,
+        CompetitiveDivisionHistoryFilter | None,
         Query(
             title="Competitive division filter",
             description=(
@@ -365,17 +355,16 @@ async def get_hero_stats_history(
         Query(
             title="Number of points to skip",
             description=(
-                "Offset into the ordered result set. `offset` + `limit` must "
-                f"not exceed {MAX_HERO_STATS_HISTORY_ROWS}."
+                "Offset into the ordered result set. Paging is done by storage, "
+                "so any page up to this bound returns real data when it exists."
             ),
             ge=0,
-            le=MAX_HERO_STATS_HISTORY_ROWS,
+            le=MAX_HISTORY_OFFSET,
             examples=[0],
         ),
     ] = 0,
 ) -> Any:
     effective_since = _resolve_history_since(since, until)
-    _validate_history_paging(limit, offset)
 
     data = await service.get_hero_stats_history(
         platform=str(platform),
@@ -392,7 +381,7 @@ async def get_hero_stats_history(
     )
     apply_swr_headers(
         response,
-        settings.hero_stats_cache_timeout,
+        settings.hero_stats_history_cache_timeout,
         False,
         0,
     )
@@ -413,7 +402,7 @@ async def get_hero_stats_history(
         "the latest available snapshot."
         "<br />Every timestamp can be passed straight back as `since`/`until` "
         "on `/heroes/stats/history`."
-        f"<br />**Cache TTL : {get_human_readable_duration(settings.hero_stats_cache_timeout)}.**"
+        f"<br />**Cache TTL : {get_human_readable_duration(settings.hero_stats_history_cache_timeout)}.**"
     ),
     operation_id="get_hero_stats_history_dates",
     response_model=list[int],
@@ -451,7 +440,7 @@ async def get_hero_stats_history_dates(
         ),
     ] = None,
     competitive_division: Annotated[
-        CompetitiveDivisionFilter | Literal["all"] | None,
+        CompetitiveDivisionHistoryFilter | None,
         Query(
             title="Competitive division filter",
             description=(
@@ -473,7 +462,7 @@ async def get_hero_stats_history_dates(
     )
     apply_swr_headers(
         response,
-        settings.hero_stats_cache_timeout,
+        settings.hero_stats_history_cache_timeout,
         False,
         0,
     )

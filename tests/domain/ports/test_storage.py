@@ -387,6 +387,64 @@ class TestHeroStatsSnapshots:
         assert [r["captured_at"] for r in result] == [1700000001, 1700000002]
 
     @pytest.mark.asyncio
+    async def test_history_offset_skips_leading_rows(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        for captured_at in (1700000001, 1700000002, 1700000003):
+            await storage_db.store_hero_stats_snapshots(captured_at, [{**base}])
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            offset=1,
+        )
+
+        assert [r["captured_at"] for r in result] == [1700000002, 1700000003]
+
+    @pytest.mark.asyncio
+    async def test_history_limit_and_offset_page_without_gaps_or_repeats(
+        self, storage_db
+    ):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        captured = [1700000001, 1700000002, 1700000003, 1700000004, 1700000005]
+        for captured_at in captured:
+            await storage_db.store_hero_stats_snapshots(captured_at, [{**base}])
+
+        pages = [
+            await storage_db.get_hero_stats_history(
+                platform="pc",
+                gamemode="competitive",
+                limit=2,
+                offset=offset,
+            )
+            for offset in (0, 2, 4, 6)
+        ]
+
+        assert [[r["captured_at"] for r in page] for page in pages] == [
+            [1700000001, 1700000002],
+            [1700000003, 1700000004],
+            [1700000005],
+            [],
+        ]
+
+    @pytest.mark.asyncio
     async def test_history_dates_returns_distinct_desc(self, storage_db):
         base = {
             "platform": "pc",

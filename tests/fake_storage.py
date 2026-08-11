@@ -172,6 +172,7 @@ class FakeStorage:
         since: int | None = None,
         until: int | None = None,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict]:
         matching = [
             row
@@ -193,6 +194,7 @@ class FakeStorage:
             if limit is None
             else max(1, min(limit, MAX_HERO_STATS_HISTORY_ROWS))
         )
+        effective_offset = max(0, offset)
         return [
             {
                 "captured_at": row["captured_at"],
@@ -206,7 +208,7 @@ class FakeStorage:
                 "winrate": row["winrate"],
                 "banrate": row.get("banrate"),
             }
-            for row in matching[:effective_limit]
+            for row in matching[effective_offset : effective_offset + effective_limit]
         ]
 
     async def get_hero_stats_history_dates(

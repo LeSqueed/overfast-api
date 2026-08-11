@@ -211,3 +211,22 @@ CompetitiveDivisionFilter = StrEnum(
 CompetitiveDivisionFilter.__doc__ = (
     "Competitive divisions ('grandmaster' includes 'champion')"
 )
+
+
+# Dynamically create the CompetitiveDivisionHistoryFilter by using the existing
+# CompetitiveDivisionFilter enum and just adding the "all" option, the combined
+# snapshot Blizzard reports across every division. This is both the set of tiers
+# the hero stats snapshot grid captures and the domain of the
+# `competitive_division` filter on the hero stats history endpoints, so the two
+# can never drift apart.
+CompetitiveDivisionHistoryFilter = StrEnum(
+    "CompetitiveDivisionHistoryFilter",
+    {
+        "ALL": "all",
+        **{tier.name: tier.value for tier in CompetitiveDivisionFilter},
+    },  # ty : ignore[invalid-argument-type]
+)
+CompetitiveDivisionHistoryFilter.__doc__ = (
+    "Competitive divisions filter for hero stats history endpoints "
+    "('all' is the combined snapshot across every division)"
+)

@@ -5,9 +5,11 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from fastapi import status
 
+from app.api.routers.heroes import MAX_HISTORY_OFFSET
 from app.config import settings
 from app.domain.enums import (
     CompetitiveDivisionFilter,
+    CompetitiveDivisionHistoryFilter,
     PlayerGamemode,
     PlayerPlatform,
     PlayerRegion,
@@ -606,7 +608,7 @@ def test_get_hero_stats_history_rejects_negative_timestamp(
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
-@pytest.mark.parametrize("division", [*list(CompetitiveDivisionFilter), "all"])
+@pytest.mark.parametrize("division", list(CompetitiveDivisionHistoryFilter))
 def test_get_hero_stats_history_accepts_known_competitive_division(
     client: TestClient, division: str
 ):
@@ -627,7 +629,7 @@ def test_get_hero_stats_history_accepts_known_competitive_division(
     assert _single_await(mock_history).kwargs["tier"] == str(division)
 
 
-@pytest.mark.parametrize("division", ["goldd", "ultimate", "GOLD", ""])
+@pytest.mark.parametrize("division", ["goldd", "ultimate", "GOLD", "", "all-divisions"])
 def test_get_hero_stats_history_rejects_unknown_competitive_division(
     client: TestClient, division: str
 ):
@@ -641,6 +643,28 @@ def test_get_hero_stats_history_rejects_unknown_competitive_division(
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+@pytest.mark.parametrize("path", ["/heroes/stats/history", "/heroes/stats/dates"])
+def test_history_competitive_division_renders_as_a_single_enum(
+    client: TestClient, path: str
+):
+    spec = client.get("/openapi.json").json()
+
+    parameters = spec["paths"][path]["get"]["parameters"]
+    schema = next(
+        parameter["schema"]
+        for parameter in parameters
+        if parameter["name"] == "competitive_division"
+    )
+
+    assert schema["anyOf"] == [
+        {"$ref": "#/components/schemas/CompetitiveDivisionHistoryFilter"},
+        {"type": "null"},
+    ]
+    assert spec["components"]["schemas"]["CompetitiveDivisionHistoryFilter"][
+        "enum"
+    ] == [division.value for division in CompetitiveDivisionHistoryFilter]
 
 
 def test_get_hero_stats_history_rejects_oversized_heroes_list(client: TestClient):
@@ -667,7 +691,7 @@ def test_get_hero_stats_history_rejects_malformed_map(client: TestClient):
 
 @pytest.mark.parametrize(
     ("limit", "offset"),
-    [(0, 0), (-1, 0), (50001, 0), (10, -1), (10, 50001)],
+    [(0, 0), (-1, 0), (50001, 0), (10, -1), (10, MAX_HISTORY_OFFSET + 1)],
 )
 def test_get_hero_stats_history_rejects_out_of_bound_paging(
     client: TestClient, limit: int, offset: int
@@ -685,21 +709,48 @@ def test_get_hero_stats_history_rejects_out_of_bound_paging(
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
-def test_get_hero_stats_history_rejects_page_beyond_storage_ceiling(
+def test_get_hero_stats_history_allows_a_page_past_the_storage_row_ceiling(
     client: TestClient,
 ):
-    response = client.get(
-        "/heroes/stats/history",
-        params={
-            "platform": "pc",
-            "gamemode": "competitive",
-            "limit": 1000,
-            "offset": 50000,
-        },
-    )
+    with patch(
+        "app.domain.services.hero_service.HeroService.get_hero_stats_history",
+        return_value=[],
+    ) as mock_history:
+        response = client.get(
+            "/heroes/stats/history",
+            params={
+                "platform": "pc",
+                "gamemode": "competitive",
+                "limit": 1000,
+                "offset": 50000,
+            },
+        )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "must not exceed" in response.json()["error"]
+    assert response.status_code == status.HTTP_200_OK
+    assert _single_await(mock_history).kwargs["offset"] == 50000  # noqa: PLR2004
+
+
+def test_get_hero_stats_history_forwards_the_page_unchanged_to_the_service(
+    client: TestClient,
+):
+    with patch(
+        "app.domain.services.hero_service.HeroService.get_hero_stats_history",
+        return_value=[],
+    ) as mock_history:
+        response = client.get(
+            "/heroes/stats/history",
+            params={
+                "platform": "pc",
+                "gamemode": "competitive",
+                "limit": 25,
+                "offset": 100,
+            },
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    call = _single_await(mock_history)
+    assert call.kwargs["limit"] == 25  # noqa: PLR2004
+    assert call.kwargs["offset"] == 100  # noqa: PLR2004
 
 
 # ---------------------------------------------------------------------------
@@ -881,7 +932,7 @@ async def test_get_hero_stats_history_populates_the_advertised_cache_key(
         "/heroes/stats/history?platform=pc&gamemode=competitive&since=1699999999"
     )
     assert call.args[1] == storage_db._hero_stats_snapshots
-    assert call.args[2] == settings.hero_stats_cache_timeout
+    assert call.args[2] == settings.hero_stats_history_cache_timeout
 
 
 @pytest.mark.asyncio
@@ -899,6 +950,61 @@ async def test_get_hero_stats_history_does_not_cache_an_empty_result(
 
     assert response.json() == []
     mock_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_hero_stats_dates_does_not_cache_an_empty_result(
+    client: TestClient,
+):
+    with patch(
+        "app.domain.services.hero_service.HeroService._update_api_cache",
+        new_callable=AsyncMock,
+    ) as mock_cache:
+        response = client.get(
+            "/heroes/stats/dates",
+            params={"platform": "pc", "gamemode": "competitive"},
+        )
+
+    assert response.json() == []
+    mock_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_hero_stats_dates_caches_with_the_history_timeout(
+    client: TestClient, storage_db: FakeStorage
+):
+    await storage_db.store_hero_stats_snapshots(1700000000, [_snapshot_row()])
+
+    with patch(
+        "app.domain.services.hero_service.HeroService._update_api_cache",
+        new_callable=AsyncMock,
+    ) as mock_cache:
+        response = client.get(
+            "/heroes/stats/dates",
+            params={"platform": "pc", "gamemode": "competitive"},
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert (
+        _single_await(mock_cache).args[2] == settings.hero_stats_history_cache_timeout
+    )
+
+
+@pytest.mark.parametrize("path", ["/heroes/stats/history", "/heroes/stats/dates"])
+@pytest.mark.asyncio
+async def test_history_endpoints_advertise_the_history_cache_timeout(
+    client: TestClient, storage_db: FakeStorage, path: str
+):
+    await storage_db.store_hero_stats_snapshots(1700000000, [_snapshot_row()])
+
+    response = client.get(
+        path,
+        params={"platform": "pc", "gamemode": "competitive", "since": 1699999999},
+    )
+
+    assert response.headers[settings.cache_ttl_header] == str(
+        settings.hero_stats_history_cache_timeout
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -428,6 +428,7 @@ class PostgresStorage(metaclass=Singleton):
         since: int | None = None,
         until: int | None = None,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict]:
         """Get hero stats history for a filter combination.
 
@@ -438,7 +439,9 @@ class PostgresStorage(metaclass=Singleton):
 
         ``limit`` is clamped to ``1..MAX_HERO_STATS_HISTORY_ROWS`` and pushed
         into the query as a ``LIMIT``, so the result set is always bounded even
-        when only ``platform`` and ``gamemode`` are given.
+        when only ``platform`` and ``gamemode`` are given. ``offset`` is clamped
+        to ``>= 0`` and pushed down as an ``OFFSET``, so paging happens in the
+        database rather than by over-fetching and discarding rows here.
 
         Returns list of dicts with 'captured_at' (int Unix ts), 'platform',
         'gamemode', 'region', 'map', 'tier', 'hero', 'pickrate', 'winrate',
@@ -455,6 +458,8 @@ class PostgresStorage(metaclass=Singleton):
             until=until,
         )
         params.append(self._clamp_history_limit(limit))
+        limit_placeholder = len(params)
+        params.append(max(0, offset))
 
         where_clause = " AND ".join(conditions)
         query = (
@@ -462,7 +467,7 @@ class PostgresStorage(metaclass=Singleton):
             "pickrate, winrate, banrate FROM hero_stats_snapshots "
             f"WHERE {where_clause} "
             "ORDER BY captured_at ASC, map ASC, tier ASC, hero ASC "
-            f"LIMIT ${len(params)}"
+            f"LIMIT ${limit_placeholder} OFFSET ${len(params)}"
         )
 
         async with self._pool.acquire() as conn:  # type: ignore[union-attr]

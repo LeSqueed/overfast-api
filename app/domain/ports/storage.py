@@ -150,6 +150,7 @@ class StoragePort(Protocol):
         since: int | None = None,
         until: int | None = None,
         limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict]:
         """Get hero stats history for a given filter combination.
 
@@ -164,6 +165,12 @@ class StoragePort(Protocol):
         ``MAX_HERO_STATS_HISTORY_ROWS``. The ceiling is always enforced, so no
         caller can ask for an unbounded result set — callers that need a
         smaller page (e.g. an API query parameter) simply pass their own value.
+
+        ``offset`` skips that many leading rows of the ordered result set
+        before ``limit`` is applied, and is clamped to ``>= 0``. Because the
+        ordering below is total, ``limit``/``offset`` page deterministically,
+        and the ceiling bounds the size of a single page rather than how far
+        the caller can reach: every stored row is reachable by paging.
 
         Returns list of dicts with ``captured_at`` (int Unix ts), ``platform``,
         ``gamemode``, ``region``, ``map``, ``tier``, ``hero``, ``pickrate``,
