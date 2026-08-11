@@ -9,6 +9,13 @@ limit_conn_status 429;
 
 # Create request zone to introduce a rate limit per IP
 limit_req_zone $binary_remote_addr zone=ofreq:10m rate=${RATE_LIMIT_PER_SECOND_PER_IP}r/s;
+
+# Dedicated zone for the dashboard. A single SPA page load fans out to 10-30
+# asset requests at once, which the API burst would reject as a flood, so the
+# dashboard gets its own counter (never eating the API budget) with a much
+# larger burst below. Static files are cheap to serve, hence the same rate.
+limit_req_zone $binary_remote_addr zone=ofdash:10m rate=${RATE_LIMIT_PER_SECOND_PER_IP}r/s;
+
 limit_req_status 429;
 
 upstream appbackend {
@@ -25,13 +32,15 @@ ${PROMETHEUS_INIT_WORKER}
 server {
   listen 80;
 
+  # Shared by every static location below (sendfile is also on at http level,
+  # repeated here so this server block stays self-contained).
+  sendfile on;
+  tcp_nopush on;
+
   # Use nginx to serve static content
   location /static {
     alias /static;
     try_files $uri =404;
-
-    sendfile on;
-    tcp_nopush on;
 
     add_header Cache-Control "public, max-age=86400";
     add_header Access-Control-Allow-Origin "*" always;
@@ -45,32 +54,106 @@ server {
     alias /static/favicon.ico;
   }
 
-  # Overwatch rates dashboard (static SPA under /dashboard/)
+  # Overwatch rates dashboard (static SPA under /dashboard/).
+  # The dashboard is built and deployed by a separate project into the shared
+  # static volume; this repository never populates /static/dashboard, so every
+  # block below must also behave sanely when the volume is empty.
+
+  # absolute_redirect off keeps the Location header relative: nginx only ever
+  # sees http here, so an absolute redirect would silently downgrade visitors
+  # arriving over HTTPS. $is_args$args keeps the query string.
   location = /dashboard {
-    return 301 /dashboard/;
+    absolute_redirect off;
+    return 301 /dashboard/$is_args$args;
   }
 
-  # Hashed build assets (content-addressed filenames): safe to cache for a year
-  location ^~ /dashboard/assets/ {
-    alias /static/dashboard/assets/;
-    try_files $uri =404;
-
-    sendfile on;
-    tcp_nopush on;
-
-    add_header Cache-Control "public, max-age=31536000, immutable";
-  }
-
-  # Entry point and non-hashed files: revalidate so new deploys are picked up
+  # ^~ is required: without it the trailing-slash redirect regex further down
+  # would match /dashboard/ and bounce it into a redirect loop. As a side
+  # effect no server-level regex location can ever match a dashboard URI, so
+  # the per-file rules are nested inside this block instead.
   location ^~ /dashboard/ {
-    alias /static/dashboard/;
+    root /static;
     index index.html;
-    try_files $uri $uri/ =404;
 
-    sendfile on;
-    tcp_nopush on;
+    # Same reason as above, for the redirect nginx adds by itself when a
+    # directory is requested without its trailing slash (/dashboard/assets).
+    # Inherited by the nested locations below.
+    absolute_redirect off;
 
-    add_header Cache-Control no-cache;
+    # The API limits live in `location /` only, which dashboard requests never
+    # reach. burst is deliberately much larger than the API one so a normal
+    # page load is not answered with a wall of 429s. Inherited by the nested
+    # locations below, so a request is counted exactly once.
+    limit_conn ofconn ${MAX_CONNECTIONS_PER_IP};
+    limit_req zone=ofdash burst=50 nodelay;
+
+    # SPA fallback: deep links and hard refreshes must serve the app shell.
+    # It goes through a named location rather than straight to
+    # /dashboard/index.html because that would internally redirect back into
+    # this block; with no dashboard deployed nginx then aborts the cycle with
+    # a confusing 500 instead of a clean 404.
+    try_files $uri $uri/ @dashboard_shell;
+
+    # First same-origin HTML served by this server, hence the hardening.
+    # Beware: add_header REPLACES the inherited set, so any header added at
+    # server level later on must be repeated here and in every nested block.
+    add_header Cache-Control "no-cache";
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # Nested locations, matched against the full URI: regexes first (in the
+    # order written), then the /dashboard/assets/ prefix, then this block.
+    # None of them may use ^~, which would short-circuit the regexes.
+
+    # Dotfiles (.env, .git, …) are never part of a build output.
+    location ~ "/\." {
+      return 404;
+    }
+
+    # Source maps: public sources, and they would inherit the year-long
+    # immutable caching of the hashed assets they sit next to.
+    location ~ "\.map$" {
+      return 404;
+    }
+
+    # immutable is gated on the filename, not on the directory: the build
+    # lives in another repository and nothing here can guarantee everything
+    # under assets/ is content-addressed. A file wrongly marked immutable is
+    # pinned in browsers for a year with no way to recover it.
+    # Matches <name><.|-><hash>.<ext> where <hash> is 8+ [A-Za-z0-9_-] chars
+    # containing a digit: covers webpack/rollup hex hashes (app.9f2c1ab4.js)
+    # and Vite base64url hashes (index-BqZ8vK3n.js), while rejecting plain
+    # names (manifest.json, logo-v2.png, background-illustration.png).
+    location ~ "^/dashboard/assets/[^/]+[.-](?=[A-Za-z0-9_-]{8,}\.)[A-Za-z0-9_-]*[0-9][A-Za-z0-9_-]*\.[^/.]+$" {
+      try_files $uri =404;
+
+      add_header Cache-Control "public, max-age=31536000, immutable";
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    }
+
+    # Everything else under assets/: exists or 404, never the SPA shell, and
+    # revalidated on every use since the name carries no version.
+    location /dashboard/assets/ {
+      try_files $uri =404;
+
+      add_header Cache-Control "no-cache";
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    }
+  }
+
+  # SPA shell. try_files resolves index.html once here, so a missing dashboard
+  # is a clean 404 and no internal redirect cycle is possible. Not rate
+  # limited on purpose: the request was already counted in /dashboard/ before
+  # falling back here.
+  location @dashboard_shell {
+    root /static;
+    try_files /dashboard/index.html =404;
+
+    add_header Cache-Control "no-cache";
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
   }
 
   # Block /metrics from public access (FastAPI metrics endpoint)
