@@ -639,4 +639,5 @@ class TestHeroServiceHistory:
             heroes=["ana"],
             since=1700000000,
             until=1700001000,
+            limit=None,
         )

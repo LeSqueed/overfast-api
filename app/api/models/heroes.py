@@ -1,7 +1,5 @@
 """Set of pydantic models used for Heroes API routes"""
 
-from datetime import datetime  # noqa: TC003  (needed at runtime by pydantic)
-
 from pydantic import BaseModel, Field, HttpUrl
 
 from app.domain.enums import (
@@ -348,17 +346,53 @@ class HeroStatsSummary(BaseModel):
 
 
 class HeroStatsHistoryPoint(BaseModel):
-    captured_at: datetime = Field(..., description="Snapshot capture timestamp (UTC)")
-    platform: str = Field(..., description="Player platform (e.g. pc)")
-    gamemode: str = Field(..., description="Gamemode (e.g. competitive)")
-    region: str = Field(..., description="Player region (e.g. europe)")
-    map: str = Field(..., description="Map key (e.g. busan)")
-    tier: str = Field(..., description="Competitive tier (e.g. gold, or 'all')")
-    hero: str = Field(
-        ..., description="Hero key used to identify Overwatch heroes in general"
+    captured_at: int = Field(
+        ...,
+        description=(
+            "Snapshot capture timestamp, as a Unix timestamp in seconds (UTC). "
+            "Same representation as the `since`/`until` query parameters and "
+            "the `/heroes/stats/dates` payload, so any value can be fed back in."
+        ),
+        ge=0,
+        examples=[1700000000],
     )
-    pickrate: float = Field(..., description="Pickrate (in percent)", ge=0.0, le=100.0)
-    winrate: float = Field(..., description="Winrate (in percent)", ge=0.0, le=100.0)
+    platform: str = Field(..., description="Player platform (e.g. pc)", examples=["pc"])
+    gamemode: str = Field(
+        ..., description="Gamemode (e.g. competitive)", examples=["competitive"]
+    )
+    region: str = Field(
+        ..., description="Player region (e.g. europe)", examples=["europe"]
+    )
+    map: str = Field(..., description="Map key (e.g. busan)", examples=["busan"])
+    competitive_division: str = Field(
+        ...,
+        description=(
+            "Competitive division of the snapshot, or 'all' for the combined "
+            "snapshot across every division."
+        ),
+        validation_alias="tier",
+        serialization_alias="competitive_division",
+        examples=["gold"],
+    )
+    hero: str = Field(
+        ...,
+        description="Hero key used to identify Overwatch heroes in general",
+        examples=["ana"],
+    )
+    pickrate: float = Field(
+        ...,
+        description="Pickrate (in percent)",
+        ge=0.0,
+        le=100.0,
+        examples=[5.5],
+    )
+    winrate: float = Field(
+        ...,
+        description="Winrate (in percent)",
+        ge=0.0,
+        le=100.0,
+        examples=[52.3],
+    )
     banrate: float | None = Field(
         None,
         description=(
@@ -367,6 +401,7 @@ class HeroStatsHistoryPoint(BaseModel):
         ),
         ge=0.0,
         le=100.0,
+        examples=[1.2],
     )
 
 

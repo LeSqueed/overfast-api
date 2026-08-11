@@ -348,8 +348,18 @@ class HeroService(StaticDataService):
         heroes: list[str] | None = None,
         since: int | None = None,
         until: int | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        cache_key: str | None = None,
     ) -> list[dict]:
         """Return historical pickrate/winrate snapshots matching the filters.
+
+        Storage has no offset of its own, so a page is taken by asking it for
+        ``offset + limit`` rows — the ordering it guarantees is total — and
+        dropping the first ``offset``. Storage clamps that request to
+        ``MAX_HERO_STATS_HISTORY_ROWS``, which is therefore also how deep
+        paging can go; callers are expected to reject deeper pages up front
+        rather than silently receive an empty one.
 
         Args:
             platform: Platform value (e.g. "pc").
@@ -360,12 +370,15 @@ class HeroService(StaticDataService):
             heroes: Optional list of hero keys (e.g. ["ana", "genji"]).
             since: Optional lower bound (Unix ts).
             until: Optional upper bound (Unix ts).
+            limit: Optional page size. None means the storage ceiling.
+            offset: Number of leading rows to skip.
+            cache_key: Optional API cache key to populate with the result.
 
         Returns:
             List of dicts with captured_at, platform, gamemode, region, map,
             tier, hero, pickrate, winrate.
         """
-        return await self.storage.get_hero_stats_history(
+        rows = await self.storage.get_hero_stats_history(
             platform=platform,
             gamemode=gamemode,
             region=region,
@@ -374,7 +387,11 @@ class HeroService(StaticDataService):
             heroes=heroes,
             since=since,
             until=until,
+            limit=None if limit is None else offset + limit,
         )
+        page = rows[offset:] if offset else rows
+        await self._cache_history_response(cache_key, page)
+        return page
 
     async def get_hero_stats_history_dates(
         self,
@@ -383,6 +400,7 @@ class HeroService(StaticDataService):
         region: str | None = None,
         map_key: str | None = None,
         tier: str | None = None,
+        cache_key: str | None = None,
     ) -> list[int]:
         """List distinct snapshot timestamps matching the filters.
 
@@ -392,17 +410,39 @@ class HeroService(StaticDataService):
             region: Optional region value (e.g. "europe").
             map_key: Optional map key (e.g. "busan").
             tier: Optional competitive division (e.g. "gold") or "all".
+            cache_key: Optional API cache key to populate with the result.
 
         Returns:
             List of int Unix timestamps, most recent first.
         """
-        return await self.storage.get_hero_stats_history_dates(
+        dates = await self.storage.get_hero_stats_history_dates(
             platform=platform,
             gamemode=gamemode,
             region=region,
             map_=map_key,
             tier=tier,
         )
+        await self._cache_history_response(cache_key, dates)
+        return dates
+
+    async def _cache_history_response(
+        self, cache_key: str | None, data: list[Any]
+    ) -> None:
+        """Populate the nginx-served API cache — never with an empty result.
+
+        These endpoints advertise ``Cache-Control``/``X-Cache-Status``, so the
+        key nginx reads (``api-cache:<request_uri>``) has to actually be
+        written; otherwise every request is a full storage scan claiming to be
+        a cache hit.
+
+        nginx serves whatever it finds under that key verbatim, without
+        consulting the app, so an empty result is deliberately *not* cached: a
+        window that has no data yet must not keep answering "no data" for the
+        whole TTL, including after the daily snapshot fills it in.
+        """
+        if not cache_key or not data:
+            return
+        await self._update_api_cache(cache_key, data, settings.hero_stats_cache_timeout)
 
     def _hero_stats_snapshot_grid(self, map_keys: list[str]) -> list[tuple]:
         """Build the full snapshot grid: platform x gamemode x region x map x tier.
