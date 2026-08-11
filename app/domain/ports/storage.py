@@ -181,6 +181,15 @@ class StoragePort(Protocol):
         mean "no hero filter"** (every hero is returned). ``since``/``until``
         are optional Unix timestamps bounding ``captured_at``.
 
+        Any optional dimension left unspecified is aggregated over rather than
+        returned as one row per value: omitting ``region`` averages the rates
+        across every region (returning ``region`` as ``"all"``), and omitting
+        ``map_`` does the same across maps. The averages are plain means of the
+        per-cell rates — ``AVG`` for the storage query — with ``banrate``
+        averaged over the non-null values only. An "all filters" request thus
+        yields one row per (``captured_at``, ``tier``, ``hero``) instead of the
+        full platform x region x map grid, which would exceed any row ceiling.
+
         ``limit`` caps the number of returned rows. It is clamped to
         ``1..MAX_HERO_STATS_HISTORY_ROWS``; ``None`` means
         ``MAX_HERO_STATS_HISTORY_ROWS``. The ceiling is always enforced, so no
@@ -195,8 +204,11 @@ class StoragePort(Protocol):
 
         Returns list of dicts with ``captured_at`` (int Unix ts), ``platform``,
         ``gamemode``, ``region``, ``map``, ``tier``, ``hero``, ``pickrate``,
-        ``winrate``, and optional ``banrate`` (None when unavailable), ordered
-        by ``captured_at``, ``map``, ``tier`` then ``hero``, all ascending.
+        ``winrate``, and ``banrate`` (None when unavailable or when every
+        aggregated value is null), ordered by ``captured_at``, then ``region``
+        and ``map`` when they are not aggregated, then ``tier`` then ``hero``,
+        all ascending. Aggregated rows report the omitted dimension as
+        ``"all"``.
         """
         ...
 

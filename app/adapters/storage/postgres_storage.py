@@ -466,6 +466,13 @@ class PostgresStorage(metaclass=Singleton):
         of hero keys and matches any of them; ``None`` and an empty list both
         mean "no hero filter". ``since``/``until`` bound ``captured_at``.
 
+        Any optional dimension left unspecified is aggregated over rather than
+        returned as one row per value: omitting ``region`` averages the rates
+        across every region (returning ``region`` as "all"), and omitting
+        ``map_`` does the same across maps. This keeps an "all filters" request
+        at one row per (captured_at, tier, hero) instead of the full grid, which
+        would otherwise exceed any row ceiling.
+
         ``limit`` is clamped to ``1..MAX_HERO_STATS_HISTORY_ROWS`` and pushed
         into the query as a ``LIMIT``, so the result set is always bounded even
         when only ``platform`` and ``gamemode`` are given. ``offset`` is clamped
@@ -473,8 +480,10 @@ class PostgresStorage(metaclass=Singleton):
         database rather than by over-fetching and discarding rows here.
 
         Returns list of dicts with 'captured_at' (int Unix ts), 'platform',
-        'gamemode', 'region', 'map', 'tier', 'hero', 'pickrate', 'winrate',
-        ordered by captured_at, map, tier then hero, all ascending.
+        'gamemode', 'region', 'map', 'tier', 'hero', 'pickrate', 'winrate'
+        and 'banrate', ordered by captured_at, then region and map when they
+        are filtered on, then tier then hero, all ascending. Aggregated rows
+        report the omitted dimension as "all".
         """
         conditions, params = self._build_snapshot_filters(
             platform=platform,
@@ -491,11 +500,49 @@ class PostgresStorage(metaclass=Singleton):
         params.append(max(0, offset))
 
         where_clause = " AND ".join(conditions)
+
+        # Dimensions are either filtered on (kept as-is) or aggregated over
+        # (collapsed to 'all' with AVG rates). tier is always a grouping column:
+        # a filter narrows it, and omitting it returns one row per division
+        # (including the pre-combined 'all' rows) just as the endpoint promises.
+        select_parts = ["captured_at", "platform", "gamemode"]
+        group_parts = ["captured_at", "platform", "gamemode"]
+        order_parts = ["captured_at"]
+
+        if region is None:
+            select_parts.append("'all' AS region")
+        else:
+            select_parts.append("region")
+            group_parts.append("region")
+            order_parts.append("region")
+
+        if map_ is None:
+            select_parts.append("'all' AS map")
+        else:
+            select_parts.append("map")
+            group_parts.append("map")
+            order_parts.append("map")
+
+        aggregating = region is None or map_ is None
+        rate_parts = (
+            [
+                "AVG(pickrate) AS pickrate",
+                "AVG(winrate) AS winrate",
+                "AVG(banrate) AS banrate",
+            ]
+            if aggregating
+            else ["pickrate", "winrate", "banrate"]
+        )
+        select_parts.extend(["tier", "hero", *rate_parts])
+        group_parts.extend(["tier", "hero"])
+        order_parts.extend(["tier", "hero"])
+
         query = (
-            "SELECT captured_at, platform, gamemode, region, map, tier, hero, "  # noqa: S608
-            "pickrate, winrate, banrate FROM hero_stats_snapshots "
+            f"SELECT {', '.join(select_parts)} "  # noqa: S608
+            "FROM hero_stats_snapshots "
             f"WHERE {where_clause} "
-            "ORDER BY captured_at ASC, map ASC, tier ASC, hero ASC "
+            f"GROUP BY {', '.join(group_parts)} "
+            f"ORDER BY {', '.join(order_parts)} "
             f"LIMIT ${limit_placeholder} OFFSET ${len(params)}"
         )
 

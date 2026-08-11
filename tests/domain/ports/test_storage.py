@@ -359,7 +359,7 @@ class TestHeroStatsSnapshots:
         assert {r["hero"] for r in result} == {"ana", "genji", "mercy"}
 
     @pytest.mark.asyncio
-    async def test_history_ordered_by_captured_at_map_tier_hero(self, storage_db):
+    async def test_history_ordered_by_captured_at_tier_hero(self, storage_db):
         base = {
             "platform": "pc",
             "gamemode": "competitive",
@@ -388,12 +388,11 @@ class TestHeroStatsSnapshots:
             gamemode="competitive",
         )
 
-        assert [(r["captured_at"], r["map"], r["tier"], r["hero"]) for r in result] == [
-            (1700000001, "dorado", "silver", "mercy"),
-            (1700000002, "busan", "gold", "ana"),
-            (1700000002, "busan", "gold", "zenyatta"),
-            (1700000002, "busan", "silver", "ana"),
-            (1700000002, "dorado", "gold", "ana"),
+        assert [(r["captured_at"], r["tier"], r["hero"]) for r in result] == [
+            (1700000001, "silver", "mercy"),
+            (1700000002, "gold", "ana"),
+            (1700000002, "gold", "zenyatta"),
+            (1700000002, "silver", "ana"),
         ]
 
     @pytest.mark.asyncio
@@ -605,9 +604,183 @@ class TestHeroStatsSnapshots:
             until=1700001000,
         )
 
-        assert len(result) == 4  # noqa: PLR2004
-        assert {r["map"] for r in result} == {"busan", "dorado"}
-        assert all(r["platform"] == "pc" for r in result)
+        assert [(r["captured_at"], r["map"]) for r in result] == [
+            (1700000001, "all"),
+            (1700000061, "all"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_history_omitted_region_averages_across_regions(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(
+            1700000001,
+            [
+                {**base, "pickrate": 5.0, "winrate": 50.0, "banrate": 1.0},
+                {
+                    **base,
+                    "region": "asia",
+                    "pickrate": 7.0,
+                    "winrate": 60.0,
+                    "banrate": 3.0,
+                },
+            ],
+        )
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            map_="busan",
+            tier="all",
+            heroes=["ana"],
+        )
+
+        assert len(result) == 1
+        assert result[0]["region"] == "all"
+        assert result[0]["map"] == "busan"
+        assert result[0]["pickrate"] == 6.0  # noqa: PLR2004
+        assert result[0]["winrate"] == 55.0  # noqa: PLR2004
+        assert result[0]["banrate"] == 2.0  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_history_omitted_map_averages_across_maps(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(
+            1700000001,
+            [
+                {**base, "map": "busan", "pickrate": 5.0},
+                {**base, "map": "ilios", "pickrate": 7.0},
+            ],
+        )
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            tier="all",
+            heroes=["ana"],
+        )
+
+        assert len(result) == 1
+        assert result[0]["map"] == "all"
+        assert result[0]["region"] == "europe"
+        assert result[0]["pickrate"] == 6.0  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_history_region_and_map_filters_keep_raw_cells(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(
+            1700000001,
+            [
+                {**base, "region": "europe", "map": "busan", "pickrate": 5.0},
+                {**base, "region": "asia", "map": "busan", "pickrate": 7.0},
+            ],
+        )
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            region="europe",
+            map_="busan",
+            tier="all",
+            heroes=["ana"],
+        )
+
+        assert len(result) == 1
+        assert result[0]["region"] == "europe"
+        assert result[0]["map"] == "busan"
+        assert result[0]["pickrate"] == 5.0  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_history_aggregated_banrate_ignores_nulls(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(
+            1700000001,
+            [
+                {**base, "region": "europe", "banrate": 1.0},
+                {**base, "region": "asia", "banrate": None},
+                {**base, "region": "americas", "banrate": 3.0},
+            ],
+        )
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            map_="busan",
+            tier="all",
+            heroes=["ana"],
+        )
+
+        assert len(result) == 1
+        assert result[0]["banrate"] == 2.0  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_history_aggregated_banrate_is_none_when_every_value_is_null(
+        self, storage_db
+    ):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(
+            1700000001,
+            [
+                {**base, "region": "europe", "banrate": None},
+                {**base, "region": "asia"},
+            ],
+        )
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc",
+            gamemode="competitive",
+            map_="busan",
+            tier="all",
+            heroes=["ana"],
+        )
+
+        assert len(result) == 1
+        assert result[0]["banrate"] is None
 
     @pytest.mark.asyncio
     async def test_restoring_a_grid_cell_overwrites_it(self, storage_db):

@@ -777,8 +777,8 @@ async def test_get_hero_stats_history_end_to_end(
             "captured_at": 1700000000,
             "platform": "pc",
             "gamemode": "competitive",
-            "region": "europe",
-            "map": "busan",
+            "region": "all",
+            "map": "all",
             "competitive_division": "all",
             "hero": "ana",
             "pickrate": 5.5,
@@ -789,14 +789,48 @@ async def test_get_hero_stats_history_end_to_end(
             "captured_at": 1700000000,
             "platform": "pc",
             "gamemode": "competitive",
-            "region": "europe",
-            "map": "busan",
+            "region": "all",
+            "map": "all",
             "competitive_division": "all",
             "hero": "genji",
             "pickrate": 5.5,
             "winrate": 52.3,
             "banrate": None,
         },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_hero_stats_history_end_to_end_aggregates_omitted_filters(
+    client: TestClient, storage_db: FakeStorage
+):
+    await storage_db.store_hero_stats_snapshots(
+        1700000000,
+        [
+            _snapshot_row(region="europe", map="busan", pickrate=5.0, winrate=50.0),
+            _snapshot_row(region="asia", map="ilios", pickrate=7.0, winrate=60.0),
+        ],
+    )
+
+    response = client.get(
+        "/heroes/stats/history",
+        params={"platform": "pc", "gamemode": "competitive", "since": 1699999999},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == [
+        {
+            "captured_at": 1700000000,
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "all",
+            "map": "all",
+            "competitive_division": "all",
+            "hero": "ana",
+            "pickrate": 6.0,
+            "winrate": 55.0,
+            "banrate": 1.2,
+        }
     ]
 
 

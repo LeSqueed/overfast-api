@@ -125,6 +125,12 @@ class FakeStorage:
             row["captured_at"],
         )
 
+    @staticmethod
+    def _average_banrate(rows: list[dict]) -> float | None:
+        """Average of the non-None banrates, or None when every one is None."""
+        banrates = [row["banrate"] for row in rows if row.get("banrate") is not None]
+        return sum(banrates) / len(banrates) if banrates else None
+
     async def store_hero_stats_snapshots(
         self, captured_at: int, rows: list[dict]
     ) -> None:
@@ -221,8 +227,39 @@ class FakeStorage:
             and (since is None or row["captured_at"] >= since)
             and (until is None or row["captured_at"] <= until)
         ]
-        matching.sort(
-            key=lambda row: (row["captured_at"], row["map"], row["tier"], row["hero"])
+        groups: dict[tuple, list[dict]] = {}
+        for row in matching:
+            group_key = (
+                row["captured_at"],
+                row["region"] if region is not None else "all",
+                row["map"] if map_ is not None else "all",
+                row["tier"],
+                row["hero"],
+            )
+            groups.setdefault(group_key, []).append(row)
+        aggregated = [
+            {
+                "captured_at": group_key[0],
+                "platform": rows[0]["platform"],
+                "gamemode": rows[0]["gamemode"],
+                "region": group_key[1],
+                "map": group_key[2],
+                "tier": group_key[3],
+                "hero": group_key[4],
+                "pickrate": sum(row["pickrate"] for row in rows) / len(rows),
+                "winrate": sum(row["winrate"] for row in rows) / len(rows),
+                "banrate": self._average_banrate(rows),
+            }
+            for group_key, rows in groups.items()
+        ]
+        aggregated.sort(
+            key=lambda row: (
+                row["captured_at"],
+                row["region"],
+                row["map"],
+                row["tier"],
+                row["hero"],
+            )
         )
         effective_limit = (
             MAX_HERO_STATS_HISTORY_ROWS
@@ -230,21 +267,7 @@ class FakeStorage:
             else max(1, min(limit, MAX_HERO_STATS_HISTORY_ROWS))
         )
         effective_offset = max(0, offset)
-        return [
-            {
-                "captured_at": row["captured_at"],
-                "platform": row["platform"],
-                "gamemode": row["gamemode"],
-                "region": row["region"],
-                "map": row["map"],
-                "tier": row["tier"],
-                "hero": row["hero"],
-                "pickrate": row["pickrate"],
-                "winrate": row["winrate"],
-                "banrate": row.get("banrate"),
-            }
-            for row in matching[effective_offset : effective_offset + effective_limit]
-        ]
+        return aggregated[effective_offset : effective_offset + effective_limit]
 
     async def get_hero_stats_history_dates(
         self,

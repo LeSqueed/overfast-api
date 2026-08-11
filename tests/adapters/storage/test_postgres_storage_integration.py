@@ -97,7 +97,7 @@ async def test_store_hero_stats_snapshots_round_trips_every_column(
     await pg_storage.store_hero_stats_snapshots(CAPTURED_AT, rows)
 
     result = await pg_storage.get_hero_stats_history(
-        platform=PLATFORM, gamemode=GAMEMODE
+        platform=PLATFORM, gamemode=GAMEMODE, region="europe", map_="all-maps"
     )
 
     assert [
@@ -173,7 +173,7 @@ async def test_get_hero_stats_history_keeps_only_the_listed_heroes(
 
 
 @pytest.mark.asyncio
-async def test_get_hero_stats_history_orders_by_captured_at_map_tier_then_hero(
+async def test_get_hero_stats_history_orders_by_captured_at_tier_then_hero(
     pg_storage: PostgresStorage,
 ):
     await pg_storage.store_hero_stats_snapshots(
@@ -194,14 +194,71 @@ async def test_get_hero_stats_history_orders_by_captured_at_map_tier_then_hero(
     )
 
     assert [
-        (row["captured_at"], row["map"], row["tier"], row["hero"]) for row in result
+        (row["captured_at"], row["region"], row["map"], row["tier"], row["hero"])
+        for row in result
     ] == [
-        (CAPTURED_AT, "busan", "diamond", "zenyatta"),
-        (CAPTURED_AT, "busan", "master", "ana"),
-        (CAPTURED_AT, "busan", "master", "zenyatta"),
-        (CAPTURED_AT, "ilios", "all", "genji"),
-        (CAPTURED_AT_LATER, "busan", "master", "ana"),
+        (CAPTURED_AT, "all", "all", "all", "genji"),
+        (CAPTURED_AT, "all", "all", "diamond", "zenyatta"),
+        (CAPTURED_AT, "all", "all", "master", "ana"),
+        (CAPTURED_AT, "all", "all", "master", "zenyatta"),
+        (CAPTURED_AT_LATER, "all", "all", "master", "ana"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_hero_stats_history_aggregates_omitted_region_and_map(
+    pg_storage: PostgresStorage,
+):
+    rows = [
+        _row(region="europe", map="busan", pickrate=10.0, winrate=50.0, banrate=1.0),
+        _row(region="asia", map="busan", pickrate=20.0, winrate=60.0, banrate=3.0),
+        _row(region="europe", map="ilios", pickrate=30.0, winrate=70.0, banrate=None),
+        _row(region="asia", map="ilios", pickrate=40.0, winrate=80.0, banrate=None),
+    ]
+    await pg_storage.store_hero_stats_snapshots(CAPTURED_AT, rows)
+
+    all_rows = await pg_storage.get_hero_stats_history(
+        platform=PLATFORM, gamemode=GAMEMODE
+    )
+
+    assert len(all_rows) == 1
+    assert all_rows[0]["region"] == "all"
+    assert all_rows[0]["map"] == "all"
+    assert all_rows[0]["pickrate"] == 25.0  # noqa: PLR2004
+    assert all_rows[0]["winrate"] == 65.0  # noqa: PLR2004
+    assert all_rows[0]["banrate"] == 2.0  # noqa: PLR2004
+
+    region_aggregated = await pg_storage.get_hero_stats_history(
+        platform=PLATFORM, gamemode=GAMEMODE, map_="busan"
+    )
+
+    assert len(region_aggregated) == 1
+    assert region_aggregated[0]["region"] == "all"
+    assert region_aggregated[0]["map"] == "busan"
+    assert region_aggregated[0]["pickrate"] == 15.0  # noqa: PLR2004
+    assert region_aggregated[0]["winrate"] == 55.0  # noqa: PLR2004
+
+    map_aggregated = await pg_storage.get_hero_stats_history(
+        platform=PLATFORM, gamemode=GAMEMODE, region="europe"
+    )
+
+    assert len(map_aggregated) == 1
+    assert map_aggregated[0]["region"] == "europe"
+    assert map_aggregated[0]["map"] == "all"
+    assert map_aggregated[0]["pickrate"] == 20.0  # noqa: PLR2004
+    assert map_aggregated[0]["winrate"] == 60.0  # noqa: PLR2004
+    assert map_aggregated[0]["banrate"] == 1.0
+
+    raw_cell = await pg_storage.get_hero_stats_history(
+        platform=PLATFORM, gamemode=GAMEMODE, region="europe", map_="busan"
+    )
+
+    assert len(raw_cell) == 1
+    assert raw_cell[0]["region"] == "europe"
+    assert raw_cell[0]["map"] == "busan"
+    assert raw_cell[0]["pickrate"] == 10.0  # noqa: PLR2004
+    assert raw_cell[0]["winrate"] == 50.0  # noqa: PLR2004
+    assert raw_cell[0]["banrate"] == 1.0
 
 
 @pytest.mark.asyncio
