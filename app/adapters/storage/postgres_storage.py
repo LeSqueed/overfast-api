@@ -417,6 +417,35 @@ class PostgresStorage(metaclass=Singleton):
         return max(1, min(limit, MAX_HERO_STATS_HISTORY_ROWS))
 
     @track_storage_operation("hero_stats_snapshots", "get")
+    @track_storage_operation("hero_stats_snapshot_runs", "reap")
+    async def reap_abandoned_hero_stats_snapshot_runs(
+        self, lease_seconds: int
+    ) -> list[int]:
+        """Complete abandoned runs, stamping the row count they actually wrote."""
+        async with self._pool.acquire() as conn:  # type: ignore[union-attr]
+            rows = await conn.fetch(
+                """UPDATE hero_stats_snapshot_runs AS r
+                   SET completed_at = NOW(),
+                       row_count = (
+                           SELECT COUNT(*)
+                           FROM hero_stats_snapshots AS s
+                           WHERE s.captured_at = r.captured_at
+                       )
+                   WHERE r.completed_at IS NULL
+                     AND r.started_at < NOW() - MAKE_INTERVAL(secs => $1::bigint)
+                   RETURNING r.captured_at""",
+                lease_seconds,
+            )
+
+        reaped = [int(row["captured_at"].timestamp()) for row in rows]
+        if reaped:
+            logger.warning(
+                "Reaped {} abandoned hero stats snapshot run(s): {}",
+                len(reaped),
+                reaped,
+            )
+        return reaped
+
     async def get_hero_stats_history(
         self,
         platform: str,

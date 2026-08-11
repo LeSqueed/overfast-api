@@ -139,6 +139,27 @@ class StoragePort(Protocol):
         """
         ...
 
+    async def reap_abandoned_hero_stats_snapshot_runs(
+        self, lease_seconds: int
+    ) -> list[int]:
+        """Finish runs whose worker died, stamping their real row count.
+
+        The cron only ever claims the current slot, so a run abandoned mid-grid
+        is never resumed by a later one: without this its slot would stay
+        unfinished forever and :meth:`get_hero_stats_history_dates` would hide
+        that day permanently, even though the rows it did write are already
+        served by :meth:`get_hero_stats_history`. Publishing what landed, with
+        an accurate ``row_count``, is the lesser evil — the alternative is data
+        that exists but can never be discovered.
+
+        Only runs unfinished for longer than ``lease_seconds`` are touched, so a
+        run still in flight is never stolen.
+
+        Returns:
+            The slots that were reaped, for the caller to report.
+        """
+        ...
+
     async def get_hero_stats_history(
         self,
         platform: str,

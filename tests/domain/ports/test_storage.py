@@ -693,6 +693,30 @@ class TestHeroStatsSnapshots:
 class TestHeroStatsSnapshotRuns:
     """Test the snapshot run slot contract: claim, complete, and visibility"""
 
+    @pytest.mark.asyncio
+    async def test_reaping_publishes_an_abandoned_run_with_its_real_row_count(
+        self, storage_db
+    ):
+        await storage_db.claim_hero_stats_snapshot_run(1700000000, 3600)
+        await storage_db.store_hero_stats_snapshots(1700000000, [self.SNAPSHOT_ROW])
+
+        reaped = await storage_db.reap_abandoned_hero_stats_snapshot_runs(0)
+        dates = await storage_db.get_hero_stats_history_dates("pc", "competitive")
+
+        assert reaped == [1700000000]
+        assert dates == [1700000000]
+
+    @pytest.mark.asyncio
+    async def test_reaping_leaves_a_run_still_within_its_lease_alone(self, storage_db):
+        await storage_db.claim_hero_stats_snapshot_run(1700000000, 3600)
+        await storage_db.store_hero_stats_snapshots(1700000000, [self.SNAPSHOT_ROW])
+
+        reaped = await storage_db.reap_abandoned_hero_stats_snapshot_runs(3600)
+        dates = await storage_db.get_hero_stats_history_dates("pc", "competitive")
+
+        assert reaped == []
+        assert dates == []
+
     SNAPSHOT_ROW: ClassVar[dict] = {
         "platform": "pc",
         "gamemode": "competitive",

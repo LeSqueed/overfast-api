@@ -179,6 +179,23 @@ class FakeStorage:
             skipped_count=skipped_count,
         )
 
+    async def reap_abandoned_hero_stats_snapshot_runs(
+        self, lease_seconds: int
+    ) -> list[int]:
+        cutoff = time.time() - lease_seconds
+        reaped = []
+        for captured_at, run in self._hero_stats_snapshot_runs.items():
+            if run["completed_at"] is not None or run["started_at"] >= cutoff:
+                continue
+            run["completed_at"] = time.time()
+            run["row_count"] = sum(
+                1
+                for row in self._hero_stats_snapshots
+                if row["captured_at"] == captured_at
+            )
+            reaped.append(captured_at)
+        return sorted(reaped)
+
     async def get_hero_stats_history(
         self,
         platform: str,

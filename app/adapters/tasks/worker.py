@@ -240,6 +240,23 @@ async def _claim_and_run_hero_stats_snapshot(
         completed, False when the slot was already taken or the run failed.
     """
     try:
+        reaped = await storage.reap_abandoned_hero_stats_snapshot_runs(
+            _SNAPSHOT_RUN_LEASE_SECONDS
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "[Worker] snapshot_hero_stats: Failed to reap abandoned run slots."
+        )
+    else:
+        if reaped:
+            logger.warning(
+                "[Worker] snapshot_hero_stats: Published {} abandoned slot(s) whose "
+                "worker never finished: {}. Their grids are partial.",
+                len(reaped),
+                reaped,
+            )
+
+    try:
         claimed = await storage.claim_hero_stats_snapshot_run(
             captured_at, _SNAPSHOT_RUN_LEASE_SECONDS
         )

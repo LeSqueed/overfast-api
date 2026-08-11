@@ -382,6 +382,30 @@ class TestClaimAndRunHeroStatsSnapshot:
         )
 
     @pytest.mark.asyncio
+    async def test_reaps_abandoned_slots_before_claiming_todays(self):
+        """A dead worker's slot is published, not hidden forever."""
+        mock_service, mock_storage = _snapshot_mocks()
+        mock_storage.reap_abandoned_hero_stats_snapshot_runs.return_value = [1699920000]
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is True
+        mock_storage.reap_abandoned_hero_stats_snapshot_runs.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_failing_reap_does_not_stop_the_run(self):
+        mock_service, mock_storage = _snapshot_mocks()
+        mock_storage.reap_abandoned_hero_stats_snapshot_runs.side_effect = OSError("x")
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is True
+
+    @pytest.mark.asyncio
     async def test_leaves_a_mostly_failed_run_unfinished(self):
         """Below the coverage bar the day stays hidden, but the rows are kept."""
         mock_service, mock_storage = _snapshot_mocks(
