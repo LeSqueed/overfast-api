@@ -230,15 +230,8 @@ _MIN_SNAPSHOT_COVERAGE = 0.95
 _SNAPSHOT_RUN_LEASE_SECONDS = 6 * 3600
 
 
-async def _claim_and_run_hero_stats_snapshot(
-    service: HeroService, storage: StoragePort, captured_at: int
-) -> bool:
-    """Claim the snapshot run slot, fill it, and mark it completed.
-
-    Returns:
-        True when the run reached the end of the grid and the slot was marked
-        completed, False when the slot was already taken or the run failed.
-    """
+async def _reap_abandoned_snapshot_runs(storage: StoragePort) -> None:
+    """Publish snapshot slots whose worker crashed before completing them."""
     try:
         reaped = await storage.reap_abandoned_hero_stats_snapshot_runs(
             _SNAPSHOT_RUN_LEASE_SECONDS
@@ -247,35 +240,20 @@ async def _claim_and_run_hero_stats_snapshot(
         logger.exception(
             "[Worker] snapshot_hero_stats: Failed to reap abandoned run slots."
         )
-    else:
-        if reaped:
-            logger.warning(
-                "[Worker] snapshot_hero_stats: Published {} abandoned slot(s) whose "
-                "worker never finished: {}. Their grids are partial.",
-                len(reaped),
-                reaped,
-            )
-
-    try:
-        claimed = await storage.claim_hero_stats_snapshot_run(
-            captured_at, _SNAPSHOT_RUN_LEASE_SECONDS
-        )
-    except Exception:  # noqa: BLE001
-        logger.exception("[Worker] snapshot_hero_stats: Failed to claim run slot.")
-        return False
-
-    if not claimed:
+        return
+    if reaped:
         logger.warning(
-            "[Worker] snapshot_hero_stats: Slot {} is already claimed by another "
-            "run, skipping.",
-            captured_at,
+            "[Worker] snapshot_hero_stats: Published {} abandoned slot(s) whose "
+            "worker never finished: {}. Their grids are partial.",
+            len(reaped),
+            reaped,
         )
-        return False
 
-    logger.info(
-        "[Worker] snapshot_hero_stats: Starting hero stats snapshot for slot {}...",
-        captured_at,
-    )
+
+async def _run_snapshot_slot(
+    service: HeroService, storage: StoragePort, captured_at: int
+) -> bool:
+    """Run one snapshot slot and mark it completed when fully captured."""
     try:
         result = await service.snapshot_hero_stats(captured_at=captured_at)
     except Exception:  # noqa: BLE001
@@ -337,6 +315,40 @@ async def _claim_and_run_hero_stats_snapshot(
         captured_at,
     )
     return True
+
+
+async def _claim_and_run_hero_stats_snapshot(
+    service: HeroService, storage: StoragePort, captured_at: int
+) -> bool:
+    """Claim the snapshot run slot, fill it, and mark it completed.
+
+    Returns:
+        True when the run reached the end of the grid and the slot was marked
+        completed, False when the slot was already taken or the run failed.
+    """
+    await _reap_abandoned_snapshot_runs(storage)
+
+    try:
+        claimed = await storage.claim_hero_stats_snapshot_run(
+            captured_at, _SNAPSHOT_RUN_LEASE_SECONDS
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("[Worker] snapshot_hero_stats: Failed to claim run slot.")
+        return False
+
+    if not claimed:
+        logger.warning(
+            "[Worker] snapshot_hero_stats: Slot {} is already claimed by another "
+            "run, skipping.",
+            captured_at,
+        )
+        return False
+
+    logger.info(
+        "[Worker] snapshot_hero_stats: Starting hero stats snapshot for slot {}...",
+        captured_at,
+    )
+    return await _run_snapshot_slot(service, storage, captured_at)
 
 
 @broker.task(schedule=[{"cron": settings.hero_stats_snapshot_cron}])

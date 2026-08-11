@@ -599,13 +599,11 @@ class HeroService(StaticDataService):
         candidates = [*scraped_keys, *sorted(remembered.difference(scraped_keys))]
 
         known_keys = set(csv_keys)
-        keys = [
+        return [
             key
             for key in candidates
             if key in known_keys or await self._blizzard_accepts_map_key(key)
         ]
-
-        return keys
 
     async def _remembered_competitive_keys(self) -> frozenset[str]:
         """Return the map keys ever observed in the competitive rotation.
