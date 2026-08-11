@@ -2,6 +2,7 @@
 
 import json
 import time
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
 from app.config import settings
@@ -28,7 +29,7 @@ from app.domain.parsers.heroes import (
     parse_heroes_html,
 )
 from app.domain.parsers.heroes_hitpoints import parse_heroes_hitpoints
-from app.domain.parsers.maps import parse_rates_maps_html
+from app.domain.parsers.maps import parse_trusted_rates_maps_html
 from app.domain.services.static_data_service import StaticDataService, StaticFetchConfig
 from app.infrastructure.logger import logger
 
@@ -37,6 +38,17 @@ if TYPE_CHECKING:
         HeroGamemode,
         Role,
     )
+
+# Cached verdicts of the "does Blizzard serve stats for this map key?" probe.
+# Accepted keys are stable, so the verdict is kept for a long while; rejected
+# ones are re-probed after a few snapshot runs, in case Blizzard enables the map
+# shortly after listing it in the dropdown.
+MAP_KEY_PROBE_CACHE_PREFIX = "map-key-probe"
+MAP_KEY_PROBE_ACCEPTED_TTL = 30 * 24 * 3600
+MAP_KEY_PROBE_REJECTED_TTL = 7 * 24 * 3600
+
+_MAP_KEY_ACCEPTED_VALUE = b"1"
+_MAP_KEY_REJECTED_VALUE = b"0"
 
 
 class HeroService(StaticDataService):
@@ -424,32 +436,129 @@ class HeroService(StaticDataService):
     async def _competitive_map_keys(self) -> list[str]:
         """Return the competitive map keys to snapshot.
 
-        Prefers the scraped competitive map list stored by MapService
-        (``maps:rates``), falling back to the CSV ``MapKey`` enum so new maps
-        are captured automatically on release even before the CSV is updated.
+        The CSV ``MapKey`` enum is the baseline. The scraped competitive map
+        list stored by MapService (``maps:rates``) narrows it down to the maps
+        actually in rotation, and may add a map the CSV doesn't know about yet —
+        but only once Blizzard has confirmed it serves stats for that key (see
+        :meth:`_blizzard_accepts_map_key`). Anything wrong with the stored
+        scrape (absent, malformed, unparseable, failing the known-map quorum,
+        or leaving nothing to snapshot) degrades to the full CSV list.
         """
+        csv_keys = [map_key.value for map_key in MapKey]
+
+        scraped_maps = await self._stored_competitive_maps()
+        if scraped_maps is None:
+            return csv_keys
+
+        known_keys = set(csv_keys)
+        keys = []
+        for map_dict in scraped_maps:
+            key = map_dict["key"]
+            if key in known_keys or await self._blizzard_accepts_map_key(key):
+                keys.append(key)
+
+        return keys or csv_keys
+
+    async def _stored_competitive_maps(self) -> list[dict] | None:
+        """Return the trusted scraped competitive maps, or None to use the CSV."""
         try:
             stored = await self.storage.get_static_data("maps:rates")
         except Exception:  # noqa: BLE001
             stored = None
-        if stored is not None:
-            if not isinstance(stored, dict) or not isinstance(stored.get("data"), str):
+
+        if stored is None:
+            return None
+
+        if not isinstance(stored, dict) or not isinstance(stored.get("data"), str):
+            logger.warning(
+                "[hero-stats-snapshot] Unexpected cached maps value: {!r}",
+                stored,
+            )
+            return None
+
+        return parse_trusted_rates_maps_html(stored["data"])
+
+    async def _blizzard_accepts_map_key(self, map_key: str) -> bool:
+        """Check Blizzard actually serves hero stats for a scraped map key.
+
+        A key that exists only in the scraped dropdown is unverified: if the
+        stats endpoint doesn't accept it, every snapshot row captured for that
+        map would be garbage. ``parse_hero_stats_json`` already raises
+        ``ParserBlizzardError`` (HTTP 400) when Blizzard echoes back a
+        ``selected`` map different from the requested one, so a single probe
+        call reuses that existing signal instead of adding a parallel one.
+
+        Only keys absent from the CSV get here, and the verdict is cached, so a
+        new map costs one extra Blizzard call rather than one per snapshot run.
+        Inconclusive failures (Blizzard unreachable, unexpected payload) are not
+        cached: the map is skipped for this run and re-probed on the next one.
+        """
+        cache_key = f"{MAP_KEY_PROBE_CACHE_PREFIX}:{map_key}"
+        cached_verdict = await self._cached_map_key_verdict(cache_key)
+        if cached_verdict is not None:
+            return cached_verdict
+
+        try:
+            await self._fetch_hero_stats_for_snapshot(
+                PlayerPlatform.PC,
+                PlayerGamemode.COMPETITIVE,
+                PlayerRegion.EUROPE,
+                map_key,
+                "all",
+            )
+        except ParserBlizzardError as exc:
+            if exc.status_code != HTTPStatus.BAD_REQUEST.value:
                 logger.warning(
-                    "[hero-stats-snapshot] Unexpected cached maps value: {!r}",
-                    stored,
+                    "[hero-stats-snapshot] Could not verify map key {}, skipping: {}",
+                    map_key,
+                    exc.message,
                 )
-                return []
-            try:
-                maps = parse_rates_maps_html(stored["data"])
-                keys = [map_dict["key"] for map_dict in maps]
-                if keys:
-                    return keys
-            except ParserParsingError as exc:
-                logger.warning(
-                    "[hero-stats-snapshot] Failed to parse competitive maps: {}",
-                    exc,
-                )
-        return [map_key.value for map_key in MapKey]
+                return False
+            logger.warning(
+                "[hero-stats-snapshot] Blizzard rejected scraped map key {}: {}",
+                map_key,
+                exc.message,
+            )
+            await self._store_map_key_verdict(cache_key, accepted=False)
+            return False
+        except (ParserInternalError, ParserParsingError) as exc:
+            logger.warning(
+                "[hero-stats-snapshot] Could not verify map key {}, skipping: {}",
+                map_key,
+                exc,
+            )
+            return False
+
+        logger.info("[hero-stats-snapshot] Adopting new scraped map key {}", map_key)
+        await self._store_map_key_verdict(cache_key, accepted=True)
+        return True
+
+    async def _cached_map_key_verdict(self, cache_key: str) -> bool | None:
+        """Read a cached map key probe verdict, None when there isn't one."""
+        try:
+            cached = await self.cache.get(cache_key)
+        except Exception:  # noqa: BLE001
+            return None
+        return None if cached is None else cached == _MAP_KEY_ACCEPTED_VALUE
+
+    async def _store_map_key_verdict(self, cache_key: str, *, accepted: bool) -> None:
+        """Cache a map key probe verdict so each new map is probed at most once."""
+        try:
+            await self.cache.set(
+                cache_key,
+                _MAP_KEY_ACCEPTED_VALUE if accepted else _MAP_KEY_REJECTED_VALUE,
+                expire=(
+                    MAP_KEY_PROBE_ACCEPTED_TTL
+                    if accepted
+                    else MAP_KEY_PROBE_REJECTED_TTL
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[hero-stats-snapshot] Could not cache map key verdict {}: {}",
+                cache_key,
+                exc,
+            )
 
     async def _fetch_hero_stats_for_snapshot(
         self,

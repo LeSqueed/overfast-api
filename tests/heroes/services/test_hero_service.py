@@ -460,7 +460,7 @@ class TestHeroServiceSnapshot:
 
         keys = await svc._competitive_map_keys()
 
-        assert keys == []
+        assert keys == [str(m) for m in MapKey]
 
     @pytest.mark.asyncio
     async def test_competitive_map_keys_handles_stored_data_not_a_str(self):
@@ -471,7 +471,7 @@ class TestHeroServiceSnapshot:
 
         keys = await svc._competitive_map_keys()
 
-        assert keys == []
+        assert keys == [str(m) for m in MapKey]
 
     @pytest.mark.asyncio
     async def test_competitive_map_keys_handles_stored_none(self):
@@ -481,6 +481,133 @@ class TestHeroServiceSnapshot:
         keys = await svc._competitive_map_keys()
 
         assert keys == [str(m) for m in MapKey]
+
+    @pytest.mark.asyncio
+    async def test_competitive_map_keys_ignores_dropdown_failing_quorum(self):
+        svc = _make_hero_service()
+        cast("Any", svc.storage).get_static_data.return_value = {
+            "data": (
+                "<html><body><main class='main-content'>"
+                "<select id='filter-map-select'><optgroup label='Control'>"
+                "<option value='junk-one'>Junk One</option>"
+                "<option value='junk-two'>Junk Two</option>"
+                "</optgroup></select></main></body></html>"
+            )
+        }
+
+        keys = await svc._competitive_map_keys()
+
+        assert keys == [str(m) for m in MapKey]
+
+
+class TestHeroServiceNewMapProbe:
+    @staticmethod
+    def _service_with_new_scraped_map(
+        cached_verdict: bytes | None = None,
+    ) -> HeroService:
+        svc = _make_hero_service()
+        rates_maps_html = read_html_file("rates_map_dropdown.html")
+        assert rates_maps_html is not None
+        cast("Any", svc.storage).get_static_data.return_value = {
+            "data": rates_maps_html.replace('value="suravasa"', 'value="brand-new-map"')
+        }
+        cast("Any", svc.cache).get.return_value = cached_verdict
+        return svc
+
+    @pytest.mark.asyncio
+    async def test_new_map_accepted_by_blizzard_is_adopted(self):
+        svc = self._service_with_new_scraped_map()
+
+        with patch.object(
+            HeroService, "_fetch_hero_stats_for_snapshot", new_callable=AsyncMock
+        ) as fetch_mock:
+            keys = await svc._competitive_map_keys()
+
+        assert "brand-new-map" in keys
+        fetch_mock.assert_awaited_once()
+        cast("Any", svc.cache).set.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_known_csv_maps_are_never_probed(self):
+        svc = self._service_with_new_scraped_map()
+
+        with patch.object(
+            HeroService, "_fetch_hero_stats_for_snapshot", new_callable=AsyncMock
+        ) as fetch_mock:
+            keys = await svc._competitive_map_keys()
+
+        assert "busan" in keys
+        assert fetch_mock.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_new_map_rejected_by_blizzard_is_skipped(self):
+        svc = self._service_with_new_scraped_map()
+        rejection = ParserBlizzardError(status_code=400, message="incompatible map")
+
+        with patch.object(
+            HeroService,
+            "_fetch_hero_stats_for_snapshot",
+            new=AsyncMock(side_effect=rejection),
+        ):
+            keys = await svc._competitive_map_keys()
+
+        assert "brand-new-map" not in keys
+        assert "busan" in keys
+        cast("Any", svc.cache).set.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_inconclusive_probe_is_skipped_without_caching(self):
+        svc = self._service_with_new_scraped_map()
+        failure = ParserInternalError("https://blizzard", ValueError("boom"))
+
+        with patch.object(
+            HeroService,
+            "_fetch_hero_stats_for_snapshot",
+            new=AsyncMock(side_effect=failure),
+        ):
+            keys = await svc._competitive_map_keys()
+
+        assert "brand-new-map" not in keys
+        cast("Any", svc.cache).set.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_blizzard_transport_error_is_skipped_without_caching(self):
+        svc = self._service_with_new_scraped_map()
+        transport_error = ParserBlizzardError(status_code=504, message="unreachable")
+
+        with patch.object(
+            HeroService,
+            "_fetch_hero_stats_for_snapshot",
+            new=AsyncMock(side_effect=transport_error),
+        ):
+            keys = await svc._competitive_map_keys()
+
+        assert "brand-new-map" not in keys
+        cast("Any", svc.cache).set.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cached_rejection_avoids_a_second_probe(self):
+        svc = self._service_with_new_scraped_map(cached_verdict=b"0")
+
+        with patch.object(
+            HeroService, "_fetch_hero_stats_for_snapshot", new_callable=AsyncMock
+        ) as fetch_mock:
+            keys = await svc._competitive_map_keys()
+
+        assert "brand-new-map" not in keys
+        fetch_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cached_acceptance_avoids_a_second_probe(self):
+        svc = self._service_with_new_scraped_map(cached_verdict=b"1")
+
+        with patch.object(
+            HeroService, "_fetch_hero_stats_for_snapshot", new_callable=AsyncMock
+        ) as fetch_mock:
+            keys = await svc._competitive_map_keys()
+
+        assert "brand-new-map" in keys
+        fetch_mock.assert_not_awaited()
 
 
 class TestHeroServiceHistory:
