@@ -1,5 +1,6 @@
 """Stateless parser functions for maps data"""
 
+import json
 import re
 from typing import TYPE_CHECKING
 
@@ -15,10 +16,18 @@ from app.domain.utils.csv_reader import read_csv_file
 from app.infrastructure.logger import logger
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from app.domain.ports import BlizzardClientPort
 
 # Blizzard sentinel used in the map dropdown / stats endpoint for "no map filter".
 ALL_MAPS_FILTER = "all-maps"
+
+# ``static_data`` key holding the accumulated set of map keys ever observed in
+# the competitive rotation, as a JSON array of strings. Kept separate from the
+# ``maps:rates`` HTML so it survives any single scrape: the scrape may only add
+# keys to it, never remove them.
+COMPETITIVE_KEYS_STORAGE_KEY = "maps:competitive"
 
 # Sanity thresholds a scraped dropdown must clear before it is trusted, see
 # has_known_maps_quorum() for the reasoning behind each of them.
@@ -196,7 +205,41 @@ def parse_trusted_rates_maps_html(html: str) -> list[dict] | None:
     return scraped_maps
 
 
-def parse_maps_html(html: str) -> list[dict]:
+def decode_competitive_keys(stored: object) -> frozenset[str]:
+    """Decode the accumulated competitive map keys from a ``static_data`` record.
+
+    Takes the record as returned by ``StoragePort.get_static_data`` (or None on
+    a miss) and returns the empty set for anything it can't make sense of, so a
+    missing or corrupted row degrades to "nothing remembered" instead of raising
+    on the maps read path.
+    """
+    if stored is None:
+        return frozenset()
+
+    data = stored.get("data") if isinstance(stored, dict) else None
+    if not isinstance(data, str):
+        logger.warning("Unexpected stored competitive map keys: {!r}", stored)
+        return frozenset()
+
+    try:
+        keys = json.loads(data)
+    except ValueError as error:
+        logger.warning("Ignoring unreadable competitive map keys: {}", error)
+        return frozenset()
+
+    if not isinstance(keys, list):
+        logger.warning("Ignoring malformed competitive map keys: {!r}", keys)
+        return frozenset()
+
+    return frozenset(key for key in keys if isinstance(key, str))
+
+
+def encode_competitive_keys(keys: Collection[str]) -> str:
+    """Serialise the accumulated competitive map keys for persistent storage."""
+    return json.dumps(sorted(keys), separators=(",", ":"))
+
+
+def parse_maps_html(html: str, known_competitive: Collection[str] = ()) -> list[dict]:
     """
     Parse the full maps list: the CSV baseline, enriched by the scraped dropdown.
 
@@ -205,10 +248,21 @@ def parse_maps_html(html: str) -> list[dict]:
     add a map the CSV doesn't know about yet (with null metadata, so a newly
     released map never breaks the API).
 
-    When the scrape is unusable (missing dropdown, junk markup, failed quorum)
-    the CSV list is served as-is with ``competitive`` set to None, meaning
-    "unknown" rather than falsely reporting every map as non-competitive. A
-    scrape failure therefore never fails a maps request.
+    ``known_competitive`` holds the map keys ever observed in the rotation,
+    accumulated across scrapes by the caller. It makes the ``competitive`` flag
+    monotonic: the scrape can only ever add to it, so a map already known to be
+    competitive keeps reporting True through a missing dropdown, a markup
+    change, a failed quorum, or its own absence from one dropdown reading.
+
+    ``competitive`` resolves as:
+
+    - True when the key is remembered or in a trusted scrape;
+    - False when we have positive information about the rotation — a trusted
+      scrape, or a non-empty remembered set — and the key is in neither;
+    - None only under total ignorance: nothing remembered and no usable scrape.
+
+    A scrape failure therefore never fails a maps request, and never downgrades
+    what is already known.
 
     Returns:
         List of map dicts with keys: key, name, screenshot, gamemodes,
@@ -216,26 +270,51 @@ def parse_maps_html(html: str) -> list[dict]:
     """
     csv_by_key = {map_dict["key"]: map_dict for map_dict in parse_maps_csv()}
     scraped_maps = parse_trusted_rates_maps_html(html)
+    scraped_by_key = {map_dict["key"]: map_dict for map_dict in scraped_maps or []}
 
-    if scraped_maps is None:
-        return [
-            _csv_map_entry(csv_by_key[key], competitive=None)
-            for key in sorted(csv_by_key)
-        ]
+    competitive_keys = frozenset(known_competitive) | scraped_by_key.keys()
+    has_competitive_info = scraped_maps is not None or bool(known_competitive)
 
-    scraped_by_key = {map_dict["key"]: map_dict for map_dict in scraped_maps}
+    entries = []
+    for key in sorted(csv_by_key.keys() | competitive_keys):
+        if key in csv_by_key:
+            entries.append(
+                _csv_map_entry(
+                    csv_by_key[key],
+                    competitive=_resolve_competitive(
+                        key, competitive_keys, has_info=has_competitive_info
+                    ),
+                )
+            )
+        elif key in scraped_by_key:
+            entries.append(_scraped_map_entry(scraped_by_key[key]))
+        else:
+            entries.append(_remembered_map_entry(key))
 
-    return [
-        _csv_map_entry(csv_by_key[key], competitive=key in scraped_by_key)
-        if key in csv_by_key
-        else _scraped_map_entry(scraped_by_key[key])
-        for key in sorted(set(csv_by_key) | set(scraped_by_key))
-    ]
+    return entries
+
+
+def competitive_keys_of(maps: list[dict]) -> frozenset[str]:
+    """Collect the keys flagged competitive in a parsed maps list.
+
+    This is what a caller unions into the persisted set: it already combines
+    what was remembered with whatever the scrape just promoted.
+    """
+    return frozenset(map_dict["key"] for map_dict in maps if map_dict["competitive"])
 
 
 def _count_known_maps(scraped_maps: list[dict]) -> int:
     """Count scraped entries whose key is a known CSV ``MapKey`` value."""
     return sum(1 for map_dict in scraped_maps if map_dict["key"] in _MAP_KEY_VALUES)
+
+
+def _resolve_competitive(
+    key: str, competitive_keys: frozenset[str], *, has_info: bool
+) -> bool | None:
+    """Resolve the ``competitive`` flag of a CSV map key."""
+    if key in competitive_keys:
+        return True
+    return False if has_info else None
 
 
 def _csv_map_entry(csv_map: dict, *, competitive: bool | None) -> dict:
@@ -258,6 +337,24 @@ def _scraped_map_entry(scraped_map: dict) -> dict:
         "name": scraped_map["name"] or scraped_map["key"],
         "screenshot": None,
         "gamemodes": scraped_map["gamemodes"],
+        "location": None,
+        "country_code": None,
+        "competitive": True,
+    }
+
+
+def _remembered_map_entry(key: str) -> dict:
+    """Build a maps list entry for a remembered map absent from CSV and scrape.
+
+    Such a map was scraped as competitive at some point but isn't in the CSV, so
+    the only thing left of it is its key. Dropping it from the list would demote
+    it just as surely as flipping its flag, so it is kept with null metadata.
+    """
+    return {
+        "key": key,
+        "name": key,
+        "screenshot": None,
+        "gamemodes": [],
         "location": None,
         "country_code": None,
         "competitive": True,

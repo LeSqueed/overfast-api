@@ -4,6 +4,9 @@ from app.domain.enums import MapGamemode, MapKey
 from app.domain.exceptions import ParserParsingError
 from app.domain.parsers.maps import (
     MIN_KNOWN_SCRAPED_MAPS,
+    competitive_keys_of,
+    decode_competitive_keys,
+    encode_competitive_keys,
     has_known_maps_quorum,
     parse_maps_csv,
     parse_maps_html,
@@ -324,3 +327,106 @@ def test_parse_maps_html_keeps_csv_metadata_when_degraded():
     assert by_key["busan"]["location"] is not None
     assert by_key["busan"]["screenshot"] is not None
     assert by_key["busan"]["gamemodes"] == ["control"]
+
+
+def test_parse_maps_html_keeps_remembered_map_competitive_on_broken_html():
+    result = parse_maps_html("<not-even-html>", {"busan"})
+
+    by_key = {m["key"]: m for m in result}
+    assert by_key["busan"]["competitive"] is True
+
+
+def test_parse_maps_html_keeps_remembered_map_competitive_on_failed_quorum():
+    html = _build_dropdown({"Control": ["junk-one", "junk-two", "junk-three"]})
+
+    result = parse_maps_html(html, {"busan"})
+
+    by_key = {m["key"]: m for m in result}
+    assert by_key["busan"]["competitive"] is True
+
+
+def test_parse_maps_html_keeps_remembered_map_competitive_when_dropdown_omits_it(
+    rates_maps_html_data: str,
+):
+    scraped_keys = [m["key"] for m in parse_rates_maps_html(rates_maps_html_data)]
+    html = _build_dropdown({"Control": [key for key in scraped_keys if key != "busan"]})
+
+    result = parse_maps_html(html, {"busan"})
+
+    by_key = {m["key"]: m for m in result}
+    assert by_key["busan"]["competitive"] is True
+    assert by_key["anubis"]["competitive"] is False
+
+
+def test_parse_maps_html_reports_false_when_only_remembered_keys_are_known():
+    result = parse_maps_html("<not-even-html>", {"busan"})
+
+    by_key = {m["key"]: m for m in result}
+    assert by_key["anubis"]["competitive"] is False
+
+
+def test_parse_maps_html_keeps_remembered_map_missing_from_csv_and_scrape():
+    result = parse_maps_html("<not-even-html>", {"brand-new-map"})
+
+    by_key = {m["key"]: m for m in result}
+    new_map = by_key["brand-new-map"]
+    assert new_map["competitive"] is True
+    assert new_map["name"] == "brand-new-map"
+    assert new_map["screenshot"] is None
+    assert new_map["gamemodes"] == []
+    assert set(new_map.keys()) == MAP_ENTRY_KEYS
+
+
+def test_parse_maps_html_stays_sorted_with_remembered_keys():
+    result = parse_maps_html("<not-even-html>", {"brand-new-map"})
+
+    assert [m["key"] for m in result] == sorted(m["key"] for m in result)
+
+
+def test_competitive_keys_of_unions_remembered_and_scraped_keys(
+    rates_maps_html_data: str,
+):
+    maps = parse_maps_html(rates_maps_html_data, {"anubis"})
+
+    result = competitive_keys_of(maps)
+
+    assert "anubis" in result
+    assert "busan" in result
+
+
+def test_competitive_keys_of_is_empty_without_any_information():
+    maps = parse_maps_html("<not-even-html>")
+
+    result = competitive_keys_of(maps)
+
+    assert result == frozenset()
+
+
+def test_encode_then_decode_competitive_keys_roundtrips():
+    encoded = encode_competitive_keys({"busan", "ilios"})
+
+    result = decode_competitive_keys({"data": encoded})
+
+    assert result == frozenset({"busan", "ilios"})
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        None,
+        "not-a-record",
+        {"data": {"not": "a string"}},
+        {"data": "<not-json>"},
+        {"data": '{"busan": true}'},
+    ],
+)
+def test_decode_competitive_keys_degrades_to_empty(stored: object):
+    result = decode_competitive_keys(stored)
+
+    assert result == frozenset()
+
+
+def test_decode_competitive_keys_drops_non_string_entries():
+    result = decode_competitive_keys({"data": '["busan", 42, null]'})
+
+    assert result == frozenset({"busan"})

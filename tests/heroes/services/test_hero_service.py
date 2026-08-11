@@ -16,6 +16,10 @@ from app.domain.exceptions import (
     ParserInternalError,
     ParserParsingError,
 )
+from app.domain.parsers.maps import (
+    COMPETITIVE_KEYS_STORAGE_KEY,
+    encode_competitive_keys,
+)
 from app.domain.services.hero_service import (
     HERO_STATS_SNAPSHOT_SLOT_SECONDS,
     HeroService,
@@ -583,6 +587,43 @@ class TestHeroServiceSnapshot:
         keys = await svc._competitive_map_keys()
 
         assert keys == [str(m) for m in MapKey]
+
+    @pytest.mark.asyncio
+    async def test_competitive_map_keys_keeps_map_dropped_from_the_dropdown(self):
+        svc = _make_hero_service()
+        rates_maps_html = read_html_file("rates_map_dropdown.html")
+        assert rates_maps_html is not None
+        without_busan = rates_maps_html.replace('value="busan"', 'value="ilios"')
+        assert 'value="busan"' not in without_busan
+        cast("Any", svc.storage).get_static_data.side_effect = lambda key: (
+            {"data": encode_competitive_keys({"busan"})}
+            if key == COMPETITIVE_KEYS_STORAGE_KEY
+            else {"data": without_busan}
+        )
+
+        keys = await svc._competitive_map_keys()
+
+        assert "busan" in keys
+        assert "anubis" not in keys
+
+    @pytest.mark.asyncio
+    async def test_competitive_map_keys_ignores_remembered_keys_it_cannot_read(self):
+        svc = _make_hero_service()
+        rates_maps_html = read_html_file("rates_map_dropdown.html")
+        assert rates_maps_html is not None
+
+        def _get_static_data(key: str) -> dict:
+            if key == COMPETITIVE_KEYS_STORAGE_KEY:
+                msg = "storage down"
+                raise RuntimeError(msg)
+            return {"data": rates_maps_html}
+
+        cast("Any", svc.storage).get_static_data.side_effect = _get_static_data
+
+        keys = await svc._competitive_map_keys()
+
+        assert "busan" in keys
+        assert "anubis" not in keys
 
     @pytest.mark.asyncio
     async def test_competitive_map_keys_ignores_dropdown_failing_quorum(self):

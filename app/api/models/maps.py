@@ -45,8 +45,13 @@ class Map(BaseModel):
         ...,
         description=(
             "Whether the map is in the competitive rotation (has hero stats data). "
-            "Null when the competitive rotation couldn't be determined, so an "
-            "unavailable rotation isn't reported as 'not competitive'."
+            "True is sticky: once a map has been seen in the rotation it keeps "
+            "reporting true, because scraping the rotation may only promote a map, "
+            "never demote one — a failed or unusable scrape, or the map dropping "
+            "out of the rotation listing, leaves the flag untouched. False means "
+            "the rotation is known and this map isn't in it. Null means no "
+            "competitive information is available at all, so an unavailable "
+            "rotation isn't reported as 'not competitive'."
         ),
         examples=[True],
     )

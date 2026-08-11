@@ -7,9 +7,17 @@ from fastapi import status
 
 from app.config import settings
 from app.domain.enums import MapGamemode, MapKey
+from app.domain.parsers.maps import (
+    COMPETITIVE_KEYS_STORAGE_KEY,
+    decode_competitive_keys,
+    encode_competitive_keys,
+)
+from app.domain.ports.storage import StaticDataCategory
 
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
+
+    from tests.fake_storage import FakeStorage
 
 
 def test_get_maps(client: TestClient):
@@ -63,3 +71,39 @@ def test_get_maps_serves_csv_when_dropdown_is_gone(client: TestClient):
     maps = response.json()
     assert {map_data["key"] for map_data in maps} == {str(m) for m in MapKey}
     assert all(map_data["competitive"] is None for map_data in maps)
+
+
+@pytest.mark.asyncio
+async def test_get_maps_keeps_remembered_maps_competitive_when_dropdown_is_gone(
+    client: TestClient, storage_db: FakeStorage
+):
+    broken_html = "<html><body><main class='main-content'></main></body></html>"
+    await storage_db.set_static_data(
+        key=COMPETITIVE_KEYS_STORAGE_KEY,
+        data=encode_competitive_keys({"busan"}),
+        category=StaticDataCategory.MAPS,
+    )
+
+    with patch(
+        "httpx2.AsyncClient.get",
+        return_value=Mock(status_code=status.HTTP_200_OK, text=broken_html),
+    ):
+        response = client.get("/maps")
+
+    assert response.status_code == status.HTTP_200_OK
+    by_key = {map_data["key"]: map_data for map_data in response.json()}
+    assert by_key["busan"]["competitive"] is True
+    assert by_key["anubis"]["competitive"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_maps_remembers_the_scraped_competitive_maps(
+    client: TestClient, storage_db: FakeStorage
+):
+    response = client.get("/maps")
+
+    assert response.status_code == status.HTTP_200_OK
+    remembered = decode_competitive_keys(
+        await storage_db.get_static_data(COMPETITIVE_KEYS_STORAGE_KEY)
+    )
+    assert "busan" in remembered

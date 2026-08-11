@@ -31,7 +31,11 @@ from app.domain.parsers.heroes import (
     parse_heroes_html,
 )
 from app.domain.parsers.heroes_hitpoints import parse_heroes_hitpoints
-from app.domain.parsers.maps import parse_trusted_rates_maps_html
+from app.domain.parsers.maps import (
+    COMPETITIVE_KEYS_STORAGE_KEY,
+    decode_competitive_keys,
+    parse_trusted_rates_maps_html,
+)
 from app.domain.services.static_data_service import StaticDataService, StaticFetchConfig
 from app.infrastructure.logger import logger
 
@@ -560,6 +564,10 @@ class HeroService(StaticDataService):
         :meth:`_blizzard_accepts_map_key`). Anything wrong with the stored
         scrape (absent, malformed, unparseable, failing the known-map quorum,
         or leaving nothing to snapshot) degrades to the full CSV list.
+
+        The accumulated competitive keys (``maps:competitive``) are unioned in,
+        so a map that was in rotation yesterday and is missing from today's
+        dropdown is still snapshotted and its history stays continuous.
         """
         csv_keys = [map_key.value for map_key in MapKey]
 
@@ -567,14 +575,34 @@ class HeroService(StaticDataService):
         if scraped_maps is None:
             return csv_keys
 
+        scraped_keys = [map_dict["key"] for map_dict in scraped_maps]
+        remembered = await self._remembered_competitive_keys()
+        candidates = [*scraped_keys, *sorted(remembered.difference(scraped_keys))]
+
         known_keys = set(csv_keys)
-        keys = []
-        for map_dict in scraped_maps:
-            key = map_dict["key"]
-            if key in known_keys or await self._blizzard_accepts_map_key(key):
-                keys.append(key)
+        keys = [
+            key
+            for key in candidates
+            if key in known_keys or await self._blizzard_accepts_map_key(key)
+        ]
 
         return keys or csv_keys
+
+    async def _remembered_competitive_keys(self) -> frozenset[str]:
+        """Return the map keys ever observed in the competitive rotation.
+
+        Degrades to the empty set when storage can't be read: the caller still
+        has the scraped list to work from.
+        """
+        try:
+            stored = await self.storage.get_static_data(COMPETITIVE_KEYS_STORAGE_KEY)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[hero-stats-snapshot] Competitive map keys unreadable: {}", exc
+            )
+            return frozenset()
+
+        return decode_competitive_keys(stored)
 
     async def _stored_competitive_maps(self) -> list[dict] | None:
         """Return the trusted scraped competitive maps, or None to use the CSV."""
