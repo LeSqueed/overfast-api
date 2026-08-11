@@ -183,8 +183,10 @@ class Settings(BaseSettings):
     hero_stats_snapshot_cron: str = "0 11 * * *"
 
     # Retention window (seconds) for hero stats snapshots before the cleanup
-    # cron removes them. Set to 0 to disable cleanup.
-    hero_stats_snapshot_max_age: int = 31536000  # 1 year
+    # cron removes them. Disabled by default (0 = never delete): the whole point
+    # of the snapshot history is to accumulate indefinitely. Only set a non-zero
+    # value if you explicitly want old history destroyed.
+    hero_stats_snapshot_max_age: int = 0
 
     ############
     # SWR STALENESS THRESHOLDS

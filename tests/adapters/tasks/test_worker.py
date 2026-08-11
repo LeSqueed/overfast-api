@@ -241,6 +241,22 @@ class TestSnapshotHeroStats:
         mock_storage.delete_old_hero_stats_snapshots.assert_awaited_once_with(31536000)
 
     @pytest.mark.asyncio
+    async def test_snapshots_without_pruning_when_max_age_zero(self):
+        """Retention is off by default (0) — snapshot history is never deleted."""
+        mock_service = AsyncMock()
+        mock_service.snapshot_hero_stats.return_value = 1500
+        mock_storage = AsyncMock()
+        with patch("app.adapters.tasks.worker.settings") as mock_settings:
+            mock_settings.hero_stats_snapshot_enabled = True
+            mock_settings.hero_stats_snapshot_max_age = 0
+            await cast("Any", snapshot_hero_stats).__wrapped__(
+                mock_service, mock_storage
+            )
+
+        mock_service.snapshot_hero_stats.assert_awaited_once()
+        mock_storage.delete_old_hero_stats_snapshots.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_exception_is_swallowed(self):
         mock_service = AsyncMock()
         mock_service.snapshot_hero_stats.side_effect = Exception("snapshot failed")
