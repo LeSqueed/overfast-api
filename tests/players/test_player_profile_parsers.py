@@ -9,10 +9,12 @@ from app.adapters.blizzard import BlizzardClient
 from app.domain.enums import PlayerGamemode, PlayerPlatform
 from app.domain.exceptions import ParserBlizzardError
 from app.domain.parsers.player_profile import (
+    _get_player_hero_keys,
     fetch_player_html,
     filter_all_stats_data,
     filter_stats_by_query,
     parse_player_profile_html,
+    validate_hero_filter,
 )
 from tests.helpers import read_html_file
 
@@ -297,3 +299,110 @@ class TestFetchPlayerHtml:
         requested_url = mock_get.call_args.args[0]
         assert requested_url.endswith(f"/{blizzard_id}/")
         assert "%25" not in requested_url
+
+
+# ---------------------------------------------------------------------------
+# validate_hero_filter
+# ---------------------------------------------------------------------------
+
+_STATS_WITH_BRAND_NEW_HERO = {
+    _PC_KEY: {
+        _QP_KEY: {
+            "heroes_comparisons": {},
+            "career_stats": {"brand-new-hero": _HERO_STATS},
+        },
+        _COMP_KEY: None,
+    },
+    _CONSOLE_KEY: None,
+}
+
+
+class TestGetPlayerHeroKeys:
+    def test_collects_keys_across_platforms_and_gamemodes(self):
+        """Keys are gathered from every section, not only the requested one."""
+        stats = {
+            _PC_KEY: {
+                _QP_KEY: {"career_stats": {"tracer": _HERO_STATS}},
+                _COMP_KEY: {"career_stats": {"genji": _HERO_STATS}},
+            },
+            _CONSOLE_KEY: {
+                _QP_KEY: {"career_stats": {"mercy": _HERO_STATS}},
+                _COMP_KEY: None,
+            },
+        }
+
+        result = _get_player_hero_keys(stats)
+
+        assert result == {"tracer", "genji", "mercy"}
+
+    def test_none_stats_returns_empty_set(self):
+        """Missing stats yield no hero keys."""
+        result = _get_player_hero_keys(None)
+
+        assert result == set()
+
+
+class TestValidateHeroFilter:
+    def test_no_hero_filter_is_accepted(self):
+        """No hero filter at all is always valid."""
+        assert validate_hero_filter(_FULL_STATS, None) is None
+
+    def test_known_hero_never_played_is_accepted(self):
+        """A heroes.csv key the player never played is a truthful empty result."""
+        assert validate_hero_filter(_FULL_STATS, "mercy") is None
+
+    def test_all_heroes_pseudo_key_is_accepted(self):
+        """The all-heroes pseudo key is a valid filter."""
+        assert validate_hero_filter(_FULL_STATS, "all-heroes") is None
+
+    def test_hero_not_in_csv_but_played_is_accepted(self):
+        """A hero released before heroes.csv caught up stays usable."""
+        assert (
+            validate_hero_filter(_STATS_WITH_BRAND_NEW_HERO, "brand-new-hero") is None
+        )
+
+    def test_unknown_hero_raises_bad_request(self):
+        """A key neither known nor played is rejected instead of returning {}."""
+        with pytest.raises(ParserBlizzardError) as exc_info:
+            validate_hero_filter(_FULL_STATS, "anaa")
+
+        assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_unknown_hero_raises_even_without_any_stats(self):
+        """Validation doesn't depend on the player having any stats at all."""
+        with pytest.raises(ParserBlizzardError):
+            validate_hero_filter(None, "anaa")
+
+
+class TestFilterStatsByQueryHeroValidation:
+    def test_hero_not_in_csv_but_played_is_returned(self):
+        """The leniency reaches the caller, not only the validation step."""
+        result = filter_stats_by_query(
+            _STATS_WITH_BRAND_NEW_HERO,
+            platform=PlayerPlatform.PC,
+            gamemode=PlayerGamemode.QUICKPLAY,
+            hero="brand-new-hero",
+        )
+
+        assert result == {"brand-new-hero": _HERO_STATS}
+
+    def test_played_hero_stays_valid_for_a_gamemode_it_was_not_played_in(self):
+        """Scanning all sections keeps a QP-only hero an empty 200, not a 400."""
+        result = filter_stats_by_query(
+            _STATS_WITH_BRAND_NEW_HERO,
+            platform=PlayerPlatform.PC,
+            gamemode=PlayerGamemode.COMPETITIVE,
+            hero="brand-new-hero",
+        )
+
+        assert result == {}
+
+    def test_unknown_hero_raises_before_any_early_return(self):
+        """Rejection happens even when the filtered slice would be empty anyway."""
+        with pytest.raises(ParserBlizzardError):
+            filter_stats_by_query(
+                _FULL_STATS,
+                platform=PlayerPlatform.CONSOLE,
+                gamemode=PlayerGamemode.COMPETITIVE,
+                hero="anaa",
+            )

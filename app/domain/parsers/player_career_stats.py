@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from app.domain.parsers.player_profile import (
     filter_stats_by_query,
     parse_player_profile_html,
+    validate_hero_filter,
 )
 
 if TYPE_CHECKING:
@@ -75,7 +76,14 @@ def _process_career_stats(
 
     Returns:
         Career stats dict, filtered by query parameters
+
+    Raises:
+        ParserBlizzardError: If the hero filter is neither known nor played
     """
+    # Validated against the raw profile, because a player without any stats
+    # returns early below and would never reach filter_stats_by_query
+    validate_hero_filter((profile_data or {}).get("stats"), hero)
+
     # Extract career stats structure
     career_stats_data = extract_career_stats_from_profile(profile_data)
 

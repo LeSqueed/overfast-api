@@ -1,6 +1,10 @@
 """Unit tests for player_career_stats parser module"""
 
+import pytest
+from fastapi import status
+
 from app.domain.enums import PlayerGamemode, PlayerPlatform
+from app.domain.exceptions import ParserBlizzardError
 from app.domain.parsers.player_career_stats import (
     _process_career_stats,
     extract_career_stats_from_profile,
@@ -135,6 +139,37 @@ class TestProcessCareerStats:
             platform=PlayerPlatform.PC,
             gamemode=PlayerGamemode.QUICKPLAY,
             hero="genji",
+        )
+
+        assert result == {}
+
+    def test_unknown_hero_filter_raises_bad_request(self):
+        """A key neither known nor played is rejected instead of returning {}."""
+        with pytest.raises(ParserBlizzardError) as exc_info:
+            _process_career_stats(
+                _PROFILE_WITH_STATS,
+                platform=PlayerPlatform.PC,
+                gamemode=PlayerGamemode.QUICKPLAY,
+                hero="anaa",
+            )
+
+        assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_unknown_hero_filter_raises_before_the_no_stats_early_return(self):
+        """A player without any stats still gets the error, not an empty body."""
+        with pytest.raises(ParserBlizzardError):
+            _process_career_stats(
+                _PROFILE_NO_STATS,
+                gamemode=PlayerGamemode.QUICKPLAY,
+                hero="anaa",
+            )
+
+    def test_known_hero_filter_on_profile_without_stats_returns_empty(self):
+        """A known hero on a statless profile still returns {}."""
+        result = _process_career_stats(
+            _PROFILE_NO_STATS,
+            gamemode=PlayerGamemode.QUICKPLAY,
+            hero="ana",
         )
 
         assert result == {}

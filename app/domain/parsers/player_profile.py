@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 from app.domain.enums import (
     CareerHeroesComparisonsCategory,
     CompetitiveRole,
+    HeroKeyCareerFilter,
     PlayerGamemode,
     PlayerPlatform,
 )
@@ -55,6 +56,11 @@ GAMEMODES_DIV_MAPPING = {
     PlayerGamemode.QUICKPLAY: "quickPlay-view",
     PlayerGamemode.COMPETITIVE: "competitive-view",
 }
+
+# Hero filter values known from heroes.csv, plus the "all-heroes" pseudo-key
+_KNOWN_HERO_FILTER_KEYS = frozenset(
+    hero_filter.value for hero_filter in HeroKeyCareerFilter
+)
 
 
 async def fetch_player_html(
@@ -551,6 +557,67 @@ def _get_heroes_options(
 # Filtering functions for API queries
 
 
+def _get_player_hero_keys(stats: dict | None) -> set[str]:
+    """
+    Collect every hero key appearing in a player's parsed stats
+
+    Works on both the raw parser output and the simplified career stats
+    structure, as both nest their hero keys under "career_stats". Every
+    platform and gamemode is scanned, not only the requested one, so a hero
+    played in quickplay only stays a valid filter for a competitive request
+    (an empty result, rather than an error).
+
+    Args:
+        stats: Raw or simplified stats dict, keyed by platform then gamemode
+
+    Returns:
+        Set of hero keys the player has statistics for
+    """
+    return {
+        hero_key
+        for platform_stats in (stats or {}).values()
+        for gamemode_stats in (platform_stats or {}).values()
+        for hero_key in ((gamemode_stats or {}).get("career_stats") or {})
+    }
+
+
+def validate_hero_filter(stats: dict | None, hero: str | None) -> None:
+    """
+    Reject a hero filter which cannot match anything, ever
+
+    A key listed in heroes.csv is always accepted, even when the player never
+    played it : an empty result is then a truthful answer. A key absent from
+    the CSV is accepted only when the player's own data contains it, so a hero
+    released before heroes.csv catches up keeps working.
+
+    This runs during the parsing step of ``_execute_player_request``, before
+    ``_update_api_cache`` is reached, so a bogus key never gets an API cache
+    entry that nginx would keep serving as an empty 200 for a whole TTL.
+
+    Args:
+        stats: Raw or simplified stats dict of the player being requested
+        hero: Hero filter provided by the client, if any
+
+    Raises:
+        ParserBlizzardError: If the hero key is neither known nor played
+    """
+    if (
+        not hero
+        or hero in _KNOWN_HERO_FILTER_KEYS
+        or hero in _get_player_hero_keys(stats)
+    ):
+        return
+
+    msg = (
+        f"Hero key '{hero}' is unknown and this player has no statistics for it. "
+        "Please check the list of available hero keys."
+    )
+    raise ParserBlizzardError(
+        status_code=HTTPStatus.BAD_REQUEST.value,
+        message=msg,
+    )
+
+
 def filter_stats_by_query(
     stats: dict | None,
     gamemode: PlayerGamemode | str,
@@ -568,7 +635,14 @@ def filter_stats_by_query(
 
     Returns:
         Filtered dict of career stats
+
+    Raises:
+        ParserBlizzardError: If the hero filter is neither known nor played
     """
+    # First statement on purpose: the early "return {}" exits below would
+    # otherwise turn an unusable hero key into a cacheable empty 200
+    validate_hero_filter(stats, hero)
+
     filtered_data = stats or {}
 
     # Normalize platform to string key

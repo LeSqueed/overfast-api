@@ -12,6 +12,7 @@ from app.api.helpers import (
     get_human_readable_duration,
 )
 from app.api.helpers import routes_responses as common_routes_responses
+from app.api.models.heroes import BadRequestErrorMessage
 from app.api.models.players import (
     CareerStats,
     Player,
@@ -40,6 +41,15 @@ career_routes_responses = {
         "description": "Player Not Found",
     },
     **common_routes_responses,
+}
+
+# Routes exposing the "hero" filter can additionally reject an unusable hero key
+hero_filter_routes_responses = {
+    status.HTTP_400_BAD_REQUEST: {
+        "model": BadRequestErrorMessage,
+        "description": "Bad Request Error",
+    },
+    **career_routes_responses,
 }
 
 
@@ -87,7 +97,8 @@ async def get_player_career_common_parameters(
                 "You also can specify 'all-heroes' for general stats. "
                 "Validated on shape only, so a hero released after the last API "
                 "update can be filtered on before it is added to the known keys "
-                "listed below."
+                "listed below. A key which is neither a known hero nor present "
+                "in the player's own statistics is rejected with a 400 error."
             ),
             pattern=HERO_KEY_PATTERN,
             json_schema_extra={
@@ -243,7 +254,7 @@ async def get_player_stats_summary(
 @router.get(
     "/{player_id}/stats/career",
     response_model_exclude_unset=True,
-    responses=career_routes_responses,
+    responses=hero_filter_routes_responses,
     tags=[RouteTag.PLAYERS],
     summary="Get player career stats",
     description=(
@@ -277,7 +288,7 @@ async def get_player_career_stats(
 @router.get(
     "/{player_id}/stats",
     response_model_exclude_unset=True,
-    responses=career_routes_responses,
+    responses=hero_filter_routes_responses,
     tags=[RouteTag.PLAYERS],
     summary="Get player stats with labels",
     description=(
