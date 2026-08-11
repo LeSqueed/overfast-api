@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.config import settings
 from app.domain.services.static_data_service import StaticDataService, StaticFetchConfig
 
 
@@ -23,6 +24,7 @@ def _make_config(
     fetcher=None,
     parser=None,
     result_filter=None,
+    fetch_fallback=None,
     storage_key="heroes:en-us",
     cache_key="/heroes",
     entity_type="heroes",
@@ -39,7 +41,13 @@ def _make_config(
         staleness_threshold=staleness_threshold,
         entity_type=entity_type,
         result_filter=result_filter,
+        fetch_fallback=fetch_fallback,
     )
+
+
+def _failing_fetcher():
+    msg = "blizzard down"
+    raise RuntimeError(msg)
 
 
 class TestGetOrFetch:
@@ -135,6 +143,118 @@ class TestGetOrFetch:
         data, _, _ = await svc.get_or_fetch(config)
 
         assert data == filtered
+
+
+class TestFetchFallback:
+    """``fetch_fallback`` is opt-in: without it, a failing fetch stays fatal.
+
+    Heroes, roles and gamemodes never set it — they have no local source, so
+    serving a degraded answer for them would mean serving nothing at all.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fetch_failure_propagates_without_a_fallback(self):
+        svc = _make_service()
+        cast("Any", svc.storage).get_static_data.return_value = None
+        config = _make_config(fetcher=_failing_fetcher)
+
+        with pytest.raises(RuntimeError, match="blizzard down"):
+            await svc.get_or_fetch(config)
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_stored_when_a_fetch_fails_without_a_fallback(self):
+        svc = _make_service()
+        cast("Any", svc.storage).get_static_data.return_value = None
+        config = _make_config(fetcher=_failing_fetcher)
+
+        with pytest.raises(RuntimeError):
+            await svc.get_or_fetch(config)
+
+        cast("Any", svc.storage).set_static_data.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_async_fetch_failure_propagates_without_a_fallback(self):
+        svc = _make_service()
+        cast("Any", svc.storage).get_static_data.return_value = None
+
+        async def async_fetcher():
+            msg = "blizzard down"
+            raise RuntimeError(msg)
+
+        config = _make_config(fetcher=async_fetcher)
+
+        with pytest.raises(RuntimeError, match="blizzard down"):
+            await svc.get_or_fetch(config)
+
+    @pytest.mark.asyncio
+    async def test_fallback_serves_the_local_source(self):
+        svc = _make_service()
+        cast("Any", svc.storage).get_static_data.return_value = None
+        local = [{"key": "local"}]
+        config = _make_config(fetcher=_failing_fetcher, fetch_fallback=lambda: local)
+
+        data, is_stale, age = await svc.get_or_fetch(config)
+
+        assert data == local
+        assert is_stale is False
+        assert age == 0
+
+    @pytest.mark.asyncio
+    async def test_degraded_result_is_never_persisted(self):
+        svc = _make_service()
+        cast("Any", svc.storage).get_static_data.return_value = None
+        config = _make_config(
+            fetcher=_failing_fetcher, fetch_fallback=lambda: [{"key": "local"}]
+        )
+
+        await svc.get_or_fetch(config)
+
+        cast("Any", svc.storage).set_static_data.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_degraded_result_is_cached_only_for_the_stale_window(self):
+        svc = _make_service()
+        cast("Any", svc.storage).get_static_data.return_value = None
+        config = _make_config(
+            fetcher=_failing_fetcher, fetch_fallback=lambda: [{"key": "local"}]
+        )
+
+        await svc.get_or_fetch(config)
+
+        cached_ttl = cast("Any", svc.cache).update_api_cache.call_args.args[2]
+        assert cached_ttl == settings.stale_cache_timeout
+        assert cached_ttl != config.cache_ttl
+
+    @pytest.mark.asyncio
+    async def test_successful_fetch_is_stored_and_cached_normally(self):
+        svc = _make_service()
+        cast("Any", svc.storage).get_static_data.return_value = None
+        config = _make_config(fetch_fallback=lambda: [{"key": "local"}])
+
+        data, _, _ = await svc.get_or_fetch(config)
+
+        assert data == [{"key": "ana"}]
+        cast("Any", svc.storage).set_static_data.assert_awaited_once()
+        assert (
+            cast("Any", svc.cache).update_api_cache.call_args.args[2]
+            == config.cache_ttl
+        )
+
+    @pytest.mark.asyncio
+    async def test_fallback_output_still_goes_through_the_parser(self):
+        svc = _make_service()
+        cast("Any", svc.storage).get_static_data.return_value = None
+        parser = MagicMock(return_value=[{"key": "parsed"}])
+        config = _make_config(
+            fetcher=_failing_fetcher,
+            fetch_fallback=lambda: "local-raw",
+            parser=parser,
+        )
+
+        data, _, _ = await svc.get_or_fetch(config)
+
+        parser.assert_called_once_with("local-raw")
+        assert data == [{"key": "parsed"}]
 
 
 class TestParseStored:

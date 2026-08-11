@@ -370,8 +370,6 @@ class HeroStatsHistoryPoint(BaseModel):
             "Competitive division of the snapshot, or 'all' for the combined "
             "snapshot across every division."
         ),
-        validation_alias="tier",
-        serialization_alias="competitive_division",
         examples=["gold"],
     )
     hero: str = Field(

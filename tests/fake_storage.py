@@ -38,7 +38,10 @@ class FakeStorage:
     # ------------------------------------------------------------------ #
 
     async def get_static_data(self, key: str) -> dict | None:
-        return self._static.get(key)
+        entry = self._static.get(key)
+        if entry is None:
+            return None
+        return {**entry, "data": entry["data"].decode("utf-8")}
 
     async def set_static_data(
         self,
@@ -47,10 +50,14 @@ class FakeStorage:
         category: StaticDataCategory,
         data_version: int = 1,
     ) -> None:
+        # Encoded on the way in and decoded on the way out, mirroring the
+        # adapter's zstd(data.encode("utf-8")) round-trip: ``data`` is a raw
+        # string, anything else fails here exactly as it fails against
+        # PostgreSQL, and a read always returns a ``str``.
         now = int(time.time())
         existing = self._static.get(key)
         self._static[key] = {
-            "data": data,
+            "data": data.encode("utf-8"),
             "category": str(category),
             "data_version": data_version,
             "updated_at": now,
@@ -121,10 +128,15 @@ class FakeStorage:
     async def store_hero_stats_snapshots(
         self, captured_at: int, rows: list[dict]
     ) -> None:
-        """Upsert rows, mirroring the adapter's ON CONFLICT DO UPDATE."""
+        """Upsert rows, mirroring the adapter's ON CONFLICT DO UPDATE.
+
+        ``banrate`` is normalised to ``None`` when absent, because the adapter
+        writes ``banrate = EXCLUDED.banrate`` unconditionally: a row that stops
+        reporting a banrate clears the stored one instead of keeping it.
+        """
         by_key = {self._snapshot_key(row): row for row in self._hero_stats_snapshots}
         for row in rows:
-            new_row = {**row, "captured_at": captured_at}
+            new_row = {**row, "captured_at": captured_at, "banrate": row.get("banrate")}
             existing = by_key.get(self._snapshot_key(new_row))
             if existing is None:
                 self._hero_stats_snapshots.append(new_row)
@@ -136,11 +148,17 @@ class FakeStorage:
         self, captured_at: int, lease_seconds: int
     ) -> bool:
         run = self._hero_stats_snapshot_runs.get(captured_at)
-        if run is not None and (
-            run["completed_at"] is not None
-            or run["started_at"] > time.time() - lease_seconds
-        ):
-            return False
+        if run is not None:
+            if (
+                run["completed_at"] is not None
+                or run["started_at"] > time.time() - lease_seconds
+            ):
+                return False
+            # Taking over a stale lease only restarts the clock, mirroring the
+            # adapter's ON CONFLICT DO UPDATE SET started_at = NOW(): the
+            # counts of the run being resumed are left untouched.
+            run["started_at"] = time.time()
+            return True
         self._hero_stats_snapshot_runs[captured_at] = {
             "started_at": time.time(),
             "completed_at": None,

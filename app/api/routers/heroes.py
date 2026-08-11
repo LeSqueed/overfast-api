@@ -35,6 +35,23 @@ from app.domain.enums import (
 )
 from app.domain.ports.storage import MAX_HERO_STATS_HISTORY_ROWS
 
+
+def _apply_history_cache_headers(response: Response, data: list) -> None:
+    """Advertise the cache only when the response was actually cached.
+
+    An empty series is deliberately not written to the API cache, so promising
+    a multi-hour ``max-age`` for it would let any proxy in front of nginx keep
+    answering "no data" across the snapshot run that fills it — the same trap
+    the storage-side guard avoids, one layer further out.
+    """
+    if not data:
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Cache-Status"] = "miss"
+        return
+
+    apply_swr_headers(response, settings.hero_stats_history_cache_timeout, False, 0)
+
+
 router = APIRouter()
 
 # Shape of a map key, shared by every endpoint taking a "map" filter. Map keys
@@ -379,12 +396,7 @@ async def get_hero_stats_history(
         offset=offset,
         cache_key=build_cache_key(request),
     )
-    apply_swr_headers(
-        response,
-        settings.hero_stats_history_cache_timeout,
-        False,
-        0,
-    )
+    _apply_history_cache_headers(response, data)
     return data
 
 
@@ -460,12 +472,7 @@ async def get_hero_stats_history_dates(
         tier=str(competitive_division) if competitive_division else None,
         cache_key=build_cache_key(request),
     )
-    apply_swr_headers(
-        response,
-        settings.hero_stats_history_cache_timeout,
-        False,
-        0,
-    )
+    _apply_history_cache_headers(response, data)
     return data
 
 

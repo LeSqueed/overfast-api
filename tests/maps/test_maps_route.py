@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import Mock, patch
 
+import httpx2
 import pytest
 from fastapi import status
 
@@ -71,6 +72,32 @@ def test_get_maps_serves_csv_when_dropdown_is_gone(client: TestClient):
     maps = response.json()
     assert {map_data["key"] for map_data in maps} == {str(m) for m in MapKey}
     assert all(map_data["competitive"] is None for map_data in maps)
+
+
+def test_get_maps_serves_csv_when_blizzard_returns_an_error(client: TestClient):
+    with patch(
+        "httpx2.AsyncClient.get",
+        return_value=Mock(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, text="Blizzard is down"
+        ),
+    ):
+        response = client.get("/maps")
+
+    assert response.status_code == status.HTTP_200_OK
+    maps = response.json()
+    assert {map_data["key"] for map_data in maps} == {str(m) for m in MapKey}
+    assert all(map_data["competitive"] is None for map_data in maps)
+
+
+def test_get_maps_serves_csv_when_blizzard_is_unreachable(client: TestClient):
+    with patch(
+        "httpx2.AsyncClient.get",
+        side_effect=httpx2.ConnectError("connection refused"),
+    ):
+        response = client.get("/maps")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert {map_data["key"] for map_data in response.json()} == {str(m) for m in MapKey}
 
 
 @pytest.mark.asyncio

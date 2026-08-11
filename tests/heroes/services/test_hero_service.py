@@ -34,6 +34,7 @@ _SNAPSHOT_SLOT = 1700006400
 
 def _make_hero_service() -> HeroService:
     cache = AsyncMock()
+    cache.get.return_value = None
     storage = AsyncMock()
     storage.get_static_data.return_value = None
     blizzard_client = AsyncMock()

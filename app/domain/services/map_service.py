@@ -8,6 +8,7 @@ from app.domain.parsers.maps import (
     encode_competitive_keys,
     fetch_rates_html,
     parse_maps_html,
+    unavailable_rates_html,
 )
 from app.domain.ports.storage import StaticDataCategory
 from app.domain.services.static_data_service import StaticDataService, StaticFetchConfig
@@ -34,6 +35,12 @@ class MapService(StaticDataService):
         The raw HTML is persisted so code changes to the parser take effect on
         the next request after restart.
 
+        ``fetch_fallback`` extends that guarantee to the fetch itself: on a cold
+        start with Blizzard unreachable there is no stored HTML to re-parse, and
+        without it the request would fail even though the whole CSV list sits
+        locally. It is set here and nowhere else — heroes, roles and gamemodes
+        have no local source, so their fetch failures must stay fatal.
+
         Returns:
             The config, and the set the parser records the resolved competitive
             keys into — pass it to :meth:`_remember_competitive_keys` once the
@@ -58,6 +65,7 @@ class MapService(StaticDataService):
         config = StaticFetchConfig(
             storage_key="maps:rates",
             fetcher=_fetch,
+            fetch_fallback=unavailable_rates_html,
             parser=_parse,
             result_filter=_filter if gamemode else None,
             cache_key=cache_key,

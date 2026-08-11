@@ -223,6 +223,10 @@ async def refresh_player_profile(
 # resume it. It must comfortably exceed a normal run (a full grid is thousands
 # of throttled Blizzard calls) while still letting a later run take over after a
 # crash — hence a value between a long run and the daily cron period.
+# A run that captured less of the grid than this is not worth advertising: the
+# dates endpoint would list the day and clients would chart a fraction of it as
+# though it were whole. The rows are still kept — only the day stays hidden.
+_MIN_SNAPSHOT_COVERAGE = 0.95
 _SNAPSHOT_RUN_LEASE_SECONDS = 6 * 3600
 
 
@@ -271,6 +275,21 @@ async def _claim_and_run_hero_stats_snapshot(
             captured_at,
             result.combinations_failed,
             result.combinations_total,
+        )
+        return False
+
+    coverage = 1.0 - (result.combinations_failed / (result.combinations_total or 1))
+    if coverage < _MIN_SNAPSHOT_COVERAGE:
+        logger.error(
+            "[Worker] snapshot_hero_stats: Only {:.0%} of the grid was captured for "
+            "slot {} ({}/{} combinations failed) — below the {:.0%} bar, so the slot "
+            "is left unfinished and the day stays hidden from the dates endpoint. "
+            "The rows already written are kept.",
+            coverage,
+            captured_at,
+            result.combinations_failed,
+            result.combinations_total,
+            _MIN_SNAPSHOT_COVERAGE,
         )
         return False
 

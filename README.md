@@ -51,6 +51,12 @@ make up
 >
 > Leave it empty when nginx is exposed directly to the internet : the header is then ignored, which is exactly what prevents clients from spoofing it to bypass the rate limit. Never set it to `0.0.0.0/0`, as it would trust every client and allow anyone to bypass the rate limit.
 
+> ⚠️ **Upgrading an existing instance? Check `HERO_STATS_SNAPSHOT_MAX_AGE` in your `.env`.**
+>
+> Hero stats snapshots are historical records : once a day is gone, it cannot be re-scraped, so the retention window now defaults to `0` (never prune) and `.env.dist` ships that value. **Your `.env` overrides the code default**, so an instance deployed before this change still carries whatever it was set to — typically `HERO_STATS_SNAPSHOT_MAX_AGE=31536000`, which keeps silently deleting every snapshot older than a year, which is exactly the data loss the new default exists to prevent.
+>
+> Set `HERO_STATS_SNAPSHOT_MAX_AGE=0` in your `.env` (or delete the line) unless you deliberately want a bounded history. Only set a non-zero value if snapshot table growth is a real constraint for you, and be aware the pruned rows are unrecoverable.
+
 ## 💽 Run as developer
 Same as earlier, ensure you have `docker` and `docker compose` installed, and generate a `.env` file using the provided `.env.dist` template. You can customize the `.env` file according to your requirements to configure the volumes used by the OverFast API.
 
@@ -264,6 +270,11 @@ taskiq scheduler app.adapters.tasks.worker:scheduler
 **Scheduled cron tasks**:
 - `cleanup_stale_players` — daily at 03:00 UTC (removes expired profiles from PostgreSQL)
 - `check_new_hero` — daily at 02:00 UTC (detects newly released heroes)
+- `hero_stats_snapshot` — daily at 11:00 UTC (`HERO_STATS_SNAPSHOT_CRON`), records historical per-map/per-tier pickrate & winrate
+
+> **Why the snapshot runs during European daytime.** Unlike the other cron tasks, `hero_stats_snapshot` is not a single request : it walks the full platform × region × map × division × hero grid, producing a long burst of throttled Blizzard requests. Running it at 11:00 UTC overlaps peak API traffic — the `BlizzardThrottle` is shared, so both back off together and the burst competes with live requests. That is accepted on purpose : a snapshot is a historical record that can never be re-scraped once the day has passed, so the run is scheduled inside working hours where a failure is actually noticed and can be re-run the same day. Adjust `HERO_STATS_SNAPSHOT_CRON` if your traffic profile makes a different window cheaper.
+
+> **Why `hero_stats_snapshots` is not partitioned.** Monthly range partitioning was considered for the snapshot table and deliberately not implemented. The schema lives in a `schema.sql` that is re-executed on every startup, and partitioning cannot be expressed idempotently there : converting an existing populated table requires creating a partitioned parent, moving the rows and swapping names, which is a one-shot offline migration rather than a statement that can safely run again on the next boot. Since the table only grows by one snapshot run per day, plain indexes are sufficient for now. If the table does become a problem, it needs a real migration step outside `schema.sql`, not a change to it.
 
 The broker is a custom `ValkeyListBroker` backed by Valkey lists. Deduplication is handled by `ValkeyTaskQueue`, which uses `SET NX` so the same entity (e.g. a player battletag) is never enqueued twice for the same task type.
 

@@ -327,7 +327,7 @@ _HISTORY_ROW = {
     "gamemode": "competitive",
     "region": "europe",
     "map": "busan",
-    "tier": "all",
+    "competitive_division": "all",
     "hero": "ana",
     "pickrate": 5.5,
     "winrate": 52.3,
@@ -931,7 +931,7 @@ async def test_get_hero_stats_history_populates_the_advertised_cache_key(
     assert call.args[0] == (
         "/heroes/stats/history?platform=pc&gamemode=competitive&since=1699999999"
     )
-    assert call.args[1] == storage_db._hero_stats_snapshots
+    assert call.args[1] == response.json()
     assert call.args[2] == settings.hero_stats_history_cache_timeout
 
 

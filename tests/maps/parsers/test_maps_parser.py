@@ -3,6 +3,7 @@ import pytest
 from app.domain.enums import MapGamemode, MapKey
 from app.domain.exceptions import ParserParsingError
 from app.domain.parsers.maps import (
+    ALL_MAPS_FILTER,
     MIN_KNOWN_SCRAPED_MAPS,
     competitive_keys_of,
     decode_competitive_keys,
@@ -13,7 +14,9 @@ from app.domain.parsers.maps import (
     parse_rates_maps_html,
     parse_trusted_rates_maps_html,
     slugify_gamemode,
+    unavailable_rates_html,
 )
+from app.domain.parsers.utils import parse_html_root, safe_get_attribute
 
 MAP_ENTRY_KEYS = {
     "key",
@@ -93,6 +96,69 @@ def test_parse_rates_maps_html_excludes_all_maps(rates_maps_html_data: str):
     result = parse_rates_maps_html(rates_maps_html_data)
 
     assert "all-maps" not in {m["key"] for m in result}
+
+
+def test_the_real_dropdown_puts_all_maps_outside_every_optgroup(
+    rates_maps_html_data: str,
+):
+    """Guards the assumption that makes the ALL_MAPS_FILTER check load-bearing.
+
+    Blizzard places the sentinel as a direct child of the ``<select>``. A parser
+    walking only ``<optgroup>`` children would never reach it, so the check that
+    drops it would be dead code and the tests around it vacuous.
+    """
+    select = parse_html_root(rates_maps_html_data).css_first("select#filter-map-select")
+
+    sentinels = [
+        option
+        for option in select.css("option")
+        if safe_get_attribute(option, "value") == ALL_MAPS_FILTER
+    ]
+
+    assert len(sentinels) == 1
+    parent = sentinels[0].parent
+    assert parent is not None
+    assert parent.tag == "select"
+
+
+def test_parse_rates_maps_html_excludes_all_maps_outside_any_optgroup():
+    html = (
+        "<html><body><main class='main-content'>"
+        "<select id='filter-map-select'>"
+        f'<option data-title="All Maps" value="{ALL_MAPS_FILTER}">All Maps</option>'
+        '<optgroup label="Control">'
+        '<option data-title="Busan" value="busan">Busan</option>'
+        "</optgroup></select></main></body></html>"
+    )
+
+    result = parse_rates_maps_html(html)
+
+    assert [m["key"] for m in result] == ["busan"]
+
+
+def test_parse_rates_maps_html_excludes_all_maps_inside_an_optgroup():
+    html = _build_dropdown({"Control": [ALL_MAPS_FILTER, "busan"]})
+
+    result = parse_rates_maps_html(html)
+
+    assert [m["key"] for m in result] == ["busan"]
+
+
+def test_parse_rates_maps_html_reads_options_outside_any_optgroup():
+    keys = [str(map_key) for map_key in list(MapKey)[:MIN_KNOWN_SCRAPED_MAPS]]
+    options = "".join(
+        f'<option data-title="{key}" value="{key}">{key}</option>' for key in keys
+    )
+    html = (
+        "<html><body><main class='main-content'>"
+        f"<select id='filter-map-select'>{options}</select>"
+        "</main></body></html>"
+    )
+
+    result = parse_rates_maps_html(html)
+
+    assert [m["key"] for m in result] == keys
+    assert all(m["gamemodes"] == [] for m in result)
 
 
 def test_parse_rates_maps_html_missing_dropdown_raises():
@@ -400,6 +466,21 @@ def test_competitive_keys_of_is_empty_without_any_information():
     result = competitive_keys_of(maps)
 
     assert result == frozenset()
+
+
+def test_unavailable_rates_html_degrades_to_the_csv_baseline():
+    result = parse_maps_html(unavailable_rates_html())
+
+    assert {m["key"] for m in result} == {str(m) for m in MapKey}
+    assert all(m["competitive"] is None for m in result)
+
+
+def test_unavailable_rates_html_keeps_remembered_maps_competitive():
+    result = parse_maps_html(unavailable_rates_html(), {"busan"})
+
+    by_key = {m["key"]: m for m in result}
+    assert by_key["busan"]["competitive"] is True
+    assert by_key["anubis"]["competitive"] is False
 
 
 def test_encode_then_decode_competitive_keys_roundtrips():

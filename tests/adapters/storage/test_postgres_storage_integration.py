@@ -11,26 +11,22 @@ contributors running the suite without the compose stack are not blocked.
 
 from __future__ import annotations
 
-import asyncio
 import time
-import uuid
 from typing import TYPE_CHECKING
-from unittest.mock import patch
 
-import asyncpg
 import pytest
 import pytest_asyncio
 
 from app.adapters.storage.postgres_storage import PostgresStorage
-from app.config import settings
-from app.infrastructure.metaclasses import Singleton
+from tests.adapters.storage.pg_testing import postgres_storage, throwaway_database
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
 
+    import asyncpg
+
 pytestmark = pytest.mark.integration
 
-CONNECT_TIMEOUT = 5.0
 LEASE_SECONDS = 3600
 
 PLATFORM = "pc"
@@ -41,57 +37,18 @@ CAPTURED_AT_LATER = CAPTURED_AT + 86_400
 CAPTURED_AT_LATEST = CAPTURED_AT + 172_800
 
 
-async def _create_throwaway_database(name: str) -> None:
-    """Create a database of our own, so the app's real tables are never touched."""
-    conn = await asyncpg.connect(dsn=settings.postgres_dsn, timeout=CONNECT_TIMEOUT)
-    try:
-        await conn.execute(f'CREATE DATABASE "{name}"')
-    finally:
-        await conn.close()
-
-
-async def _drop_throwaway_database(name: str) -> None:
-    """Drop the throwaway database, disconnecting any pool that outlived a test."""
-    conn = await asyncpg.connect(dsn=settings.postgres_dsn, timeout=CONNECT_TIMEOUT)
-    try:
-        await conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-    finally:
-        await conn.close()
-
-
 @pytest.fixture(scope="module")
-def throwaway_database() -> Iterator[str]:
-    """Yield the name of a database created for this module and dropped after it.
-
-    Skips the module when the server is unreachable (no stack running, wrong
-    credentials, missing database): these tests are additive signal, never a
-    prerequisite for running the suite.
-    """
-    name = f"overfast_integration_{uuid.uuid4().hex[:12]}"
-    try:
-        asyncio.run(_create_throwaway_database(name))
-    except (OSError, TimeoutError, asyncpg.PostgresError) as exc:
-        pytest.skip(f"PostgreSQL is not reachable: {exc!r}")
-
-    yield name
-
-    asyncio.run(_drop_throwaway_database(name))
+def integration_database() -> Iterator[str]:
+    """Name of a database created for this module and dropped after it."""
+    with throwaway_database() as name:
+        yield name
 
 
 @pytest_asyncio.fixture
-async def pg_storage(throwaway_database: str) -> AsyncIterator[PostgresStorage]:
+async def pg_storage(integration_database: str) -> AsyncIterator[PostgresStorage]:
     """Real PostgresStorage bound to the throwaway database, with schema.sql applied."""
-    Singleton.clear_all()
-
-    with patch.object(settings, "postgres_db", throwaway_database):
-        storage = PostgresStorage()
-        await storage.initialize()
-
-    await storage.clear_all_data()
-
-    yield storage
-
-    await storage.close()
+    async with postgres_storage(integration_database) as storage:
+        yield storage
 
 
 def _row(**overrides: str | float | None) -> dict:
@@ -313,6 +270,29 @@ async def test_claim_hero_stats_snapshot_run_takes_over_an_expired_lease(
     )
 
     assert result is True
+
+
+@pytest.mark.asyncio
+async def test_claim_hero_stats_snapshot_run_takeover_only_restarts_the_clock(
+    pg_storage: PostgresStorage,
+):
+    """Resuming a run restarts its lease and changes nothing else about it."""
+    await pg_storage.claim_hero_stats_snapshot_run(
+        CAPTURED_AT, lease_seconds=LEASE_SECONDS
+    )
+    before = await _fetch_run(pg_storage, CAPTURED_AT)
+
+    await pg_storage.claim_hero_stats_snapshot_run(CAPTURED_AT, lease_seconds=0)
+
+    after = await _fetch_run(pg_storage, CAPTURED_AT)
+    assert before is not None
+    assert after is not None
+    assert after["started_at"] >= before["started_at"]
+    assert after["completed_at"] is None
+    assert (after["row_count"], after["skipped_count"]) == (
+        before["row_count"],
+        before["skipped_count"],
+    )
 
 
 @pytest.mark.asyncio

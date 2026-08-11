@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi import status
 
+from app.config import settings
+from app.domain.enums import MapKey
 from app.domain.parsers.maps import (
     COMPETITIVE_KEYS_STORAGE_KEY,
     decode_competitive_keys,
@@ -142,6 +144,93 @@ async def test_list_maps_survives_a_failing_competitive_keys_write(
     maps, _, _ = await svc.list_maps(None, "/maps")
 
     assert {m["key"]: m["competitive"] for m in maps}["busan"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_maps_degrades_to_the_csv_when_the_cold_fetch_fails(
+    storage_db: FakeStorage,
+):
+    svc = _make_map_service(storage_db)
+    cast("Any", svc.blizzard_client).get.side_effect = RuntimeError("blizzard down")
+
+    maps, _, _ = await svc.list_maps(None, "/maps")
+
+    assert {m["key"] for m in maps} == {str(m) for m in MapKey}
+    assert all(m["competitive"] is None for m in maps)
+
+
+@pytest.mark.asyncio
+async def test_list_maps_does_not_store_a_degraded_cold_fetch(
+    storage_db: FakeStorage,
+):
+    svc = _make_map_service(storage_db)
+    cast("Any", svc.blizzard_client).get.side_effect = RuntimeError("blizzard down")
+
+    await svc.list_maps(None, "/maps")
+
+    assert await storage_db.get_static_data("maps:rates") is None
+
+
+@pytest.mark.asyncio
+async def test_list_maps_caches_a_degraded_cold_fetch_only_briefly(
+    storage_db: FakeStorage,
+):
+    svc = _make_map_service(storage_db)
+    cast("Any", svc.blizzard_client).get.side_effect = RuntimeError("blizzard down")
+
+    await svc.list_maps(None, "/maps")
+
+    cached_ttl = cast("Any", svc.cache).update_api_cache.call_args.args[2]
+    assert cached_ttl == settings.stale_cache_timeout
+    assert cached_ttl < settings.csv_cache_timeout
+
+
+@pytest.mark.asyncio
+async def test_list_maps_keeps_remembered_maps_competitive_when_the_fetch_fails(
+    storage_db: FakeStorage,
+):
+    await _store_competitive_keys(storage_db, {"busan"})
+    svc = _make_map_service(storage_db)
+    cast("Any", svc.blizzard_client).get.side_effect = RuntimeError("blizzard down")
+
+    maps, _, _ = await svc.list_maps(None, "/maps")
+
+    by_key = {m["key"]: m for m in maps}
+    assert by_key["busan"]["competitive"] is True
+    assert by_key["anubis"]["competitive"] is False
+
+
+@pytest.mark.asyncio
+async def test_list_maps_retries_the_fetch_after_a_degraded_cold_fetch(
+    storage_db: FakeStorage, rates_maps_html_data: str
+):
+    svc = _make_map_service(storage_db)
+    blizzard = cast("Any", svc.blizzard_client)
+    blizzard.get.side_effect = RuntimeError("blizzard down")
+    await svc.list_maps(None, "/maps")
+    blizzard.get.side_effect = None
+    blizzard.get.return_value = Mock(
+        status_code=status.HTTP_200_OK, text=rates_maps_html_data
+    )
+
+    maps, _, _ = await svc.list_maps(None, "/maps")
+
+    assert {m["key"]: m["competitive"] for m in maps}["busan"] is True
+    assert await storage_db.get_static_data("maps:rates") is not None
+
+
+@pytest.mark.asyncio
+async def test_refresh_list_degrades_to_the_csv_when_the_fetch_fails(
+    storage_db: FakeStorage,
+):
+    await _store_competitive_keys(storage_db, {"busan"})
+    svc = _make_map_service(storage_db)
+    cast("Any", svc.blizzard_client).get.side_effect = RuntimeError("blizzard down")
+
+    await svc.refresh_list()
+
+    assert await storage_db.get_static_data("maps:rates") is None
+    assert await _stored_competitive_keys(storage_db) == frozenset({"busan"})
 
 
 @pytest.mark.asyncio

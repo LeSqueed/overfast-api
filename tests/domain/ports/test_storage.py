@@ -1,7 +1,13 @@
-"""Tests for the StoragePort contract — exercised via FakeStorage"""
+"""Tests for the StoragePort contract.
 
+Each test runs once per implementation of the port — see ``conftest.py`` for the
+``storage_db`` parametrization — so the in-memory fake and the real PostgreSQL
+adapter are held to exactly the same behaviour.
+"""
+
+import json
 import time
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 
@@ -13,11 +19,10 @@ class TestStaticData:
 
     @pytest.mark.asyncio
     async def test_set_and_get_static_data(self, storage_db):
-        test_data = {"key": "hero-ana", "name": "Ana", "role": "support"}
-
+        raw = json.dumps({"key": "hero-ana", "name": "Ana", "role": "support"})
         await storage_db.set_static_data(
             key="hero-ana",
-            data=test_data,
+            data=raw,
             category=StaticDataCategory.HERO,
             data_version=1,
         )
@@ -25,21 +30,47 @@ class TestStaticData:
         result = await storage_db.get_static_data("hero-ana")
 
         assert result is not None
+        assert result["data"] == raw
         assert result["category"] == "hero"
         assert result["data_version"] == 1
-        assert result["data"] == test_data
         assert result["updated_at"] > 0
+
+    @pytest.mark.asyncio
+    async def test_stored_data_is_read_back_as_a_string(self, storage_db):
+        """``data`` is a raw string going in and coming back out."""
+        await storage_db.set_static_data(
+            key="hero-ana",
+            data='{"name": "Ana"}',
+            category=StaticDataCategory.HERO,
+        )
+
+        result = await storage_db.get_static_data("hero-ana")
+
+        assert isinstance(result["data"], str)
+
+    @pytest.mark.asyncio
+    async def test_set_static_data_rejects_a_non_string_payload(self, storage_db):
+        """Passing an object instead of a raw string fails, it is not stored."""
+        payload: Any = {"name": "Ana"}
+
+        with pytest.raises(AttributeError):
+            await storage_db.set_static_data(
+                key="hero-ana",
+                data=payload,
+                category=StaticDataCategory.HERO,
+            )
 
     @pytest.mark.asyncio
     async def test_get_nonexistent_static_data(self, storage_db):
         result = await storage_db.get_static_data("nonexistent-key")
+
         assert result is None
 
     @pytest.mark.asyncio
     async def test_update_static_data(self, storage_db):
         await storage_db.set_static_data(
             key="hero-mercy",
-            data={"version": 1},
+            data='{"version": 1}',
             category=StaticDataCategory.HERO,
             data_version=1,
         )
@@ -47,13 +78,13 @@ class TestStaticData:
 
         await storage_db.set_static_data(
             key="hero-mercy",
-            data={"version": 2},
+            data='{"version": 2}',
             category=StaticDataCategory.HERO,
             data_version=2,
         )
-        updated = await storage_db.get_static_data("hero-mercy")
 
-        assert updated["data"]["version"] == 2  # noqa: PLR2004
+        updated = await storage_db.get_static_data("hero-mercy")
+        assert updated["data"] == '{"version": 2}'
         assert updated["data_version"] == 2  # noqa: PLR2004
         assert updated["updated_at"] >= first["updated_at"]
 
@@ -71,12 +102,12 @@ class TestPlayerProfiles:
             "lastUpdated": 1678536999,
             "url": "abc123",
         }
-
         await storage_db.set_player_profile(
             player_id=player_id, html=html, summary=summary
         )
 
         result = await storage_db.get_player_profile(player_id)
+
         assert result is not None
         assert result["html"] == html
         assert result["summary"] == summary
@@ -85,12 +116,12 @@ class TestPlayerProfiles:
     @pytest.mark.asyncio
     async def test_set_and_get_player_profile_without_summary(self, storage_db):
         player_id = "Player-1234"
-
         await storage_db.set_player_profile(
             player_id=player_id, html="<html/>", summary=None
         )
 
         result = await storage_db.get_player_profile(player_id)
+
         assert result is not None
         assert "url" in result["summary"]
         assert "lastUpdated" in result["summary"]
@@ -99,12 +130,12 @@ class TestPlayerProfiles:
     @pytest.mark.asyncio
     async def test_get_nonexistent_player_profile(self, storage_db):
         result = await storage_db.get_player_profile("NonExistent-9999")
+
         assert result is None
 
     @pytest.mark.asyncio
     async def test_update_player_profile(self, storage_db):
         player_id = "UpdateTest-1111"
-
         await storage_db.set_player_profile(
             player_id=player_id,
             html="<html>v1</html>",
@@ -117,8 +148,8 @@ class TestPlayerProfiles:
             html="<html>v2</html>",
             summary={"lastUpdated": 2000000},
         )
-        updated = await storage_db.get_player_profile(player_id)
 
+        updated = await storage_db.get_player_profile(player_id)
         assert updated["html"] == "<html>v2</html>"
         assert updated["summary"]["lastUpdated"] == 2000000  # noqa: PLR2004
         assert updated["updated_at"] >= first["updated_at"]
@@ -127,7 +158,6 @@ class TestPlayerProfiles:
     async def test_get_player_id_by_battletag(self, storage_db):
         player_id = "Player-1234"
         battletag = "TestPlayer-5678"
-
         await storage_db.set_player_profile(
             player_id=player_id,
             html="<html/>",
@@ -152,13 +182,16 @@ class TestStorageStats:
     @pytest.mark.asyncio
     async def test_get_stats_returns_counts(self, storage_db):
         await storage_db.set_static_data(
-            key="map-ilios", data={"name": "Ilios"}, category=StaticDataCategory.MAPS
+            key="map-ilios",
+            data='{"name": "Ilios"}',
+            category=StaticDataCategory.MAPS,
         )
         await storage_db.set_player_profile(
             player_id="Stats-1234", html="<html/>", summary={"name": "Stats"}
         )
 
         stats = await storage_db.get_stats()
+
         assert stats["static_data_count"] == 1
         assert stats["player_profiles_count"] == 1
         assert "size_bytes" in stats
@@ -187,6 +220,7 @@ class TestStorageStats:
     @pytest.mark.asyncio
     async def test_get_stats_empty_database(self, storage_db):
         stats = await storage_db.get_stats()
+
         assert stats["static_data_count"] == 0
         assert stats["player_profiles_count"] == 0
         assert stats["size_bytes"] >= 0
@@ -220,7 +254,6 @@ class TestHeroStatsSnapshots:
                 "winrate": 53.0,
             },
         ]
-
         await storage_db.store_hero_stats_snapshots(captured_at, rows)
 
         result = await storage_db.get_hero_stats_history(
@@ -460,8 +493,7 @@ class TestHeroStatsSnapshots:
         await storage_db.store_hero_stats_snapshots(1700000001, [{**base}])
         await storage_db.store_hero_stats_snapshots(1700000002, [{**base}])
         await storage_db.store_hero_stats_snapshots(
-            1700000002,
-            [{**base, "region": "asia"}],
+            1700000002, [{**base, "hero": "genji"}]
         )
 
         result = await storage_db.get_hero_stats_history_dates(
@@ -474,7 +506,24 @@ class TestHeroStatsSnapshots:
 
         assert result == [1700000003, 1700000002, 1700000001]
 
-        asia_result = await storage_db.get_hero_stats_history_dates(
+    @pytest.mark.asyncio
+    async def test_history_dates_filtered_by_region(self, storage_db):
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(1700000001, [{**base}])
+        await storage_db.store_hero_stats_snapshots(
+            1700000002, [{**base, "region": "asia"}]
+        )
+
+        result = await storage_db.get_hero_stats_history_dates(
             platform="pc",
             gamemode="competitive",
             region="asia",
@@ -482,7 +531,7 @@ class TestHeroStatsSnapshots:
             tier="all",
         )
 
-        assert asia_result == [1700000002]
+        assert result == [1700000002]
 
     @pytest.mark.asyncio
     async def test_history_since_until_filters(self, storage_db):
@@ -581,11 +630,34 @@ class TestHeroStatsSnapshots:
         result = await storage_db.get_hero_stats_history(
             platform="pc", gamemode="competitive"
         )
-
         assert len(result) == 1
         assert result[0]["pickrate"] == 9.0  # noqa: PLR2004
         assert result[0]["winrate"] == 60.0  # noqa: PLR2004
         assert result[0]["banrate"] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_restoring_a_grid_cell_clears_a_dropped_banrate(self, storage_db):
+        """A cell whose banrate is no longer reported loses the stored one."""
+        base = {
+            "platform": "pc",
+            "gamemode": "competitive",
+            "region": "europe",
+            "map": "busan",
+            "tier": "all",
+            "hero": "ana",
+            "pickrate": 5.0,
+            "winrate": 50.0,
+        }
+        await storage_db.store_hero_stats_snapshots(
+            1700000001, [{**base, "banrate": 9.9}]
+        )
+
+        await storage_db.store_hero_stats_snapshots(1700000001, [{**base}])
+
+        result = await storage_db.get_hero_stats_history(
+            platform="pc", gamemode="competitive"
+        )
+        assert [r["banrate"] for r in result] == [None]
 
     @pytest.mark.asyncio
     async def test_delete_old_snapshots(self, storage_db):
@@ -655,6 +727,42 @@ class TestHeroStatsSnapshotRuns:
         assert claimed is True
 
     @pytest.mark.asyncio
+    async def test_resuming_a_run_restarts_its_lease(self, storage_db):
+        """The resumed slot is held again: a third worker must stand down."""
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 0)
+
+        claimed = await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+
+        assert claimed is False
+
+    @pytest.mark.asyncio
+    async def test_resumed_run_stays_hidden_until_it_completes(self, storage_db):
+        """Taking over a stale lease resumes the run, it does not finish it."""
+        await storage_db.store_hero_stats_snapshots(1700006400, [{**self.SNAPSHOT_ROW}])
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 0)
+
+        result = await storage_db.get_hero_stats_history_dates(
+            platform="pc", gamemode="competitive"
+        )
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_completing_a_resumed_run_publishes_its_dates(self, storage_db):
+        await storage_db.store_hero_stats_snapshots(1700006400, [{**self.SNAPSHOT_ROW}])
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+        await storage_db.claim_hero_stats_snapshot_run(1700006400, 0)
+
+        await storage_db.complete_hero_stats_snapshot_run(1700006400, 1, 0)
+
+        result = await storage_db.get_hero_stats_history_dates(
+            platform="pc", gamemode="competitive"
+        )
+        assert result == [1700006400]
+
+    @pytest.mark.asyncio
     async def test_completed_run_is_never_reclaimed(self, storage_db):
         await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
         await storage_db.complete_hero_stats_snapshot_run(1700006400, 1500, 3)
@@ -666,24 +774,24 @@ class TestHeroStatsSnapshotRuns:
     @pytest.mark.asyncio
     async def test_unfinished_run_hides_its_dates(self, storage_db):
         await storage_db.store_hero_stats_snapshots(1700006400, [{**self.SNAPSHOT_ROW}])
+
         await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
 
         result = await storage_db.get_hero_stats_history_dates(
             platform="pc", gamemode="competitive"
         )
-
         assert result == []
 
     @pytest.mark.asyncio
     async def test_completing_a_run_publishes_its_dates(self, storage_db):
         await storage_db.store_hero_stats_snapshots(1700006400, [{**self.SNAPSHOT_ROW}])
         await storage_db.claim_hero_stats_snapshot_run(1700006400, 21600)
+
         await storage_db.complete_hero_stats_snapshot_run(1700006400, 1, 0)
 
         result = await storage_db.get_hero_stats_history_dates(
             platform="pc", gamemode="competitive"
         )
-
         assert result == [1700006400]
 
     @pytest.mark.asyncio
@@ -735,19 +843,26 @@ class TestDataIntegrity:
         await storage_db.set_player_profile(
             player_id="LargeHTML-5555", html=large_html, summary={"name": "Large"}
         )
+
         result = await storage_db.get_player_profile("LargeHTML-5555")
+
         assert result["html"] == large_html
 
     @pytest.mark.asyncio
     async def test_unicode_data_integrity(self, storage_db):
-        test_data = {
-            "name": "Lúcio",
-            "emoji": "🎵🎶",
-            "description": "Héros de soutien",
-        }
-        await storage_db.set_static_data(
-            key="hero-lucio", data=test_data, category=StaticDataCategory.HERO
+        raw = json.dumps(
+            {
+                "name": "Lúcio",
+                "emoji": "🎵🎶",
+                "description": "Héros de soutien",
+            },
+            ensure_ascii=False,
         )
+        await storage_db.set_static_data(
+            key="hero-lucio", data=raw, category=StaticDataCategory.HERO
+        )
+
         result = await storage_db.get_static_data("hero-lucio")
-        assert result["data"]["name"] == "Lúcio"
-        assert result["data"]["emoji"] == "🎵🎶"
+
+        assert result["data"] == raw
+        assert json.loads(result["data"])["name"] == "Lúcio"

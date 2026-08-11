@@ -34,6 +34,21 @@ class StaticFetchConfig:
     entity_type: str
     parser: Callable[[Any], Any] | None = field(default=None)
     result_filter: Callable[[Any], Any] | None = field(default=None)
+    fetch_fallback: Callable[[], Any] | None = field(default=None)
+    """Opt-in local stand-in for ``fetcher``, used only when the fetch fails.
+
+    Left unset — the default — a failing fetch propagates and the request
+    fails, which is the only correct outcome for an entity whose data exists
+    solely on Blizzard's side (heroes, roles, gamemodes): there is nothing to
+    serve instead. Only an entity backed by a complete local source may set
+    this, so that a Blizzard outage on a cold start degrades to that source
+    rather than failing the request.
+
+    It returns a raw source in the same shape ``fetcher`` would, so the result
+    still goes through ``parser``. A result produced this way is *degraded*: it
+    is never written to persistent storage and is cached only briefly, so it is
+    never mistaken for the authoritative value.
+    """
 
 
 class StaticDataService(BaseService):
@@ -156,30 +171,67 @@ class StaticDataService(BaseService):
         """Apply ``result_filter`` to ``data`` if provided, otherwise return as-is."""
         return result_filter(data) if result_filter is not None else data
 
+    async def _fetch_source(self, config: StaticFetchConfig) -> tuple[Any, bool]:
+        """Fetch the raw source, falling back locally when the fetch fails.
+
+        Returns:
+            ``(raw, is_degraded)``. ``is_degraded`` is True when the fetch
+            failed and ``config.fetch_fallback`` supplied a local stand-in.
+
+        Raises:
+            Exception: Whatever the fetcher raised, when no
+                ``fetch_fallback`` is configured. Entities without a local
+                source must still fail loudly rather than serve nothing.
+        """
+        try:
+            if inspect.iscoroutinefunction(config.fetcher):
+                return await config.fetcher(), False
+            return config.fetcher(), False
+        except Exception as exc:
+            if config.fetch_fallback is None:
+                raise
+            # Deliberately broad: a fetch fails as an HTTP error, a timeout, a
+            # rate-limit rejection or a raw socket error depending on how far it
+            # got, and this entity has declared a local source good enough to
+            # serve in all of those cases. The result is flagged degraded rather
+            # than swallowed, so it never reaches persistent storage.
+            logger.warning(
+                "[SWR] {} fetch failed ({}) — falling back to the local source",
+                config.entity_type,
+                exc,
+            )
+            return config.fetch_fallback(), True
+
     async def _fetch_and_store(self, config: StaticFetchConfig) -> Any:
-        """Fetch from source, persist raw source to persistent storage, update Valkey, return filtered data."""
-        if inspect.iscoroutinefunction(config.fetcher):
-            raw = await config.fetcher()
-        else:
-            raw = config.fetcher()
+        """Fetch from source, persist raw source to persistent storage, update Valkey, return filtered data.
+
+        A degraded fetch (see ``StaticFetchConfig.fetch_fallback``) skips the
+        persistent storage write and is cached for ``stale_cache_timeout`` only,
+        so the outage is never recorded as the authoritative value and the very
+        next request past that window retries the real source.
+        """
+        raw, degraded = await self._fetch_source(config)
 
         data = config.parser(raw) if config.parser is not None else raw
 
-        # Store the raw source so re-parses on storage hits always use current parser code.
-        # For HTML sources (parser set): raw is the HTML string.
-        # For CSV sources (no parser): raw is already the parsed data; serialise as JSON.
-        raw_to_store = (
-            raw if config.parser is not None else json.dumps(raw, separators=(",", ":"))
-        )
-        await self._store_in_storage(
-            config.storage_key, raw_to_store, config.entity_type
-        )
+        if not degraded:
+            # Store the raw source so re-parses on storage hits always use current parser code.
+            # For HTML sources (parser set): raw is the HTML string.
+            # For CSV sources (no parser): raw is already the parsed data; serialise as JSON.
+            raw_to_store = (
+                raw
+                if config.parser is not None
+                else json.dumps(raw, separators=(",", ":"))
+            )
+            await self._store_in_storage(
+                config.storage_key, raw_to_store, config.entity_type
+            )
 
         filtered = self._apply_filter(data, config.result_filter)
         await self._update_api_cache(
             config.cache_key,
             filtered,
-            config.cache_ttl,
+            settings.stale_cache_timeout if degraded else config.cache_ttl,
             staleness_threshold=config.staleness_threshold,
         )
 

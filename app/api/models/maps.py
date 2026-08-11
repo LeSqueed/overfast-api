@@ -44,14 +44,16 @@ class Map(BaseModel):
     competitive: bool | None = Field(
         ...,
         description=(
-            "Whether the map is in the competitive rotation (has hero stats data). "
-            "True is sticky: once a map has been seen in the rotation it keeps "
-            "reporting true, because scraping the rotation may only promote a map, "
-            "never demote one — a failed or unusable scrape, or the map dropping "
-            "out of the rotation listing, leaves the flag untouched. False means "
-            "the rotation is known and this map isn't in it. Null means no "
-            "competitive information is available at all, so an unavailable "
-            "rotation isn't reported as 'not competitive'."
+            "Whether the map has been listed in Blizzard's competitive map filter. "
+            "True is sticky: once a map has been seen in that listing it keeps "
+            "reporting true, because reading the listing may only promote a map, "
+            "never demote one — a failed or unusable read, or the map dropping "
+            "out of the listing, leaves the flag untouched. False means the "
+            "listing is known and this map isn't in it. Null means no competitive "
+            "information is available at all, so an unavailable listing isn't "
+            "reported as 'not competitive'. Note that true is not a guarantee "
+            "that hero statistics exist for the map: it reports what the filter "
+            "listed, not what the stats endpoints will return."
         ),
         examples=[True],
     )

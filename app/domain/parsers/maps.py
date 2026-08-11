@@ -18,6 +18,8 @@ from app.infrastructure.logger import logger
 if TYPE_CHECKING:
     from collections.abc import Collection
 
+    from selectolax.lexbor import LexborNode
+
     from app.domain.ports import BlizzardClientPort
 
 # Blizzard sentinel used in the map dropdown / stats endpoint for "no map filter".
@@ -80,6 +82,18 @@ async def fetch_rates_html(client: BlizzardClientPort) -> str:
     return response.text
 
 
+def unavailable_rates_html() -> str:
+    """The stand-in source to use when the rates page can't be fetched at all.
+
+    It carries no dropdown, so :func:`parse_maps_html` takes exactly the same
+    degradation path as an unusable scrape: the authoritative CSV baseline,
+    enriched only by the competitive keys already remembered. This is what lets
+    a maps request survive a Blizzard outage on a cold start, when there is no
+    stored HTML to re-parse either.
+    """
+    return ""
+
+
 def slugify_gamemode(label: str) -> str | None:
     """Convert a scraped optgroup label into a ``MapGamemode`` value.
 
@@ -124,22 +138,24 @@ def parse_rates_maps_html(html: str) -> list[dict]:
             raise ParserParsingError(msg)
 
         maps: dict[str, dict] = {}
-        for optgroup in map_select.css("optgroup"):
-            gamemode = slugify_gamemode(safe_get_attribute(optgroup, "label") or "")
-            for option in optgroup.css("option"):
-                key = safe_get_attribute(option, "value")
-                if not key or key == ALL_MAPS_FILTER:
-                    continue
-                map_dict = maps.setdefault(
-                    key,
-                    {
-                        "key": key,
-                        "name": safe_get_attribute(option, "data-title") or key,
-                        "gamemodes": [],
-                    },
-                )
-                if gamemode is not None and gamemode not in map_dict["gamemodes"]:
-                    map_dict["gamemodes"].append(gamemode)
+        # Every option of the dropdown, not just the ones nested in an optgroup:
+        # Blizzard puts the ALL_MAPS_FILTER sentinel directly under the <select>,
+        # so a per-optgroup walk would never see it — and never filter it out.
+        for option in map_select.css("option"):
+            key = safe_get_attribute(option, "value")
+            if not key or key == ALL_MAPS_FILTER:
+                continue
+            map_dict = maps.setdefault(
+                key,
+                {
+                    "key": key,
+                    "name": safe_get_attribute(option, "data-title") or key,
+                    "gamemodes": [],
+                },
+            )
+            gamemode = _option_gamemode(option)
+            if gamemode is not None and gamemode not in map_dict["gamemodes"]:
+                map_dict["gamemodes"].append(gamemode)
 
         if not maps:
             msg = "No competitive maps found in map filter dropdown"
@@ -301,6 +317,18 @@ def competitive_keys_of(maps: list[dict]) -> frozenset[str]:
     what was remembered with whatever the scrape just promoted.
     """
     return frozenset(map_dict["key"] for map_dict in maps if map_dict["competitive"])
+
+
+def _option_gamemode(option: LexborNode) -> str | None:
+    """Resolve the gamemode of a dropdown option from its enclosing optgroup.
+
+    Returns None for an option Blizzard places outside every optgroup — it is
+    still a map, it just carries no gamemode from the dropdown.
+    """
+    parent = option.parent
+    if parent is None or parent.tag != "optgroup":
+        return None
+    return slugify_gamemode(safe_get_attribute(parent, "label") or "")
 
 
 def _count_known_maps(scraped_maps: list[dict]) -> int:

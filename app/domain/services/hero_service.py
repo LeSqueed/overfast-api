@@ -49,6 +49,9 @@ if TYPE_CHECKING:
 # Accepted keys are stable, so the verdict is kept for a long while; rejected
 # ones are re-probed after a few snapshot runs, in case Blizzard enables the map
 # shortly after listing it in the dropdown.
+# Note these TTLs are upper bounds only: ValkeyCache.evict_volatile_data() drops
+# every key but the unknown-player ones on shutdown, so a restart costs one
+# re-probe per new map. That is cheap enough not to warrant an exemption.
 MAP_KEY_PROBE_CACHE_PREFIX = "map-key-probe"
 MAP_KEY_PROBE_ACCEPTED_TTL = 30 * 24 * 3600
 MAP_KEY_PROBE_REJECTED_TTL = 7 * 24 * 3600
@@ -466,8 +469,9 @@ class HeroService(StaticDataService):
             limit=limit,
             offset=offset,
         )
-        await self._cache_history_response(cache_key, page)
-        return page
+        rows = [self._to_public_history_row(row) for row in page]
+        await self._cache_history_response(cache_key, rows)
+        return rows
 
     async def get_hero_stats_history_dates(
         self,
@@ -500,6 +504,21 @@ class HeroService(StaticDataService):
         )
         await self._cache_history_response(cache_key, dates)
         return dates
+
+    @staticmethod
+    def _to_public_history_row(row: dict) -> dict:
+        """Rename the storage column to the name the API contract publishes.
+
+        Storage keys the competitive division as ``tier``; the response model
+        publishes ``competitive_division``. The renaming has to happen here
+        rather than in the model, because the cached payload nginx serves
+        verbatim never passes through the model — so an alias would make the
+        cached copy and the app-served copy disagree on the field name.
+        """
+        return {
+            key if key != "tier" else "competitive_division": value
+            for key, value in row.items()
+        }
 
     async def _cache_history_response(
         self, cache_key: str | None, data: list[Any]
@@ -562,8 +581,8 @@ class HeroService(StaticDataService):
         actually in rotation, and may add a map the CSV doesn't know about yet —
         but only once Blizzard has confirmed it serves stats for that key (see
         :meth:`_blizzard_accepts_map_key`). Anything wrong with the stored
-        scrape (absent, malformed, unparseable, failing the known-map quorum,
-        or leaving nothing to snapshot) degrades to the full CSV list.
+        scrape (absent, malformed, unparseable, or failing the known-map
+        quorum) degrades to the full CSV list.
 
         The accumulated competitive keys (``maps:competitive``) are unioned in,
         so a map that was in rotation yesterday and is missing from today's
@@ -586,7 +605,7 @@ class HeroService(StaticDataService):
             if key in known_keys or await self._blizzard_accepts_map_key(key)
         ]
 
-        return keys or csv_keys
+        return keys
 
     async def _remembered_competitive_keys(self) -> frozenset[str]:
         """Return the map keys ever observed in the competitive rotation.

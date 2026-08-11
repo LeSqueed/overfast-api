@@ -367,9 +367,9 @@ class TestClaimAndRunHeroStatsSnapshot:
 
     @pytest.mark.asyncio
     async def test_completes_a_partial_run(self):
-        """A grid with holes is still published — it is better than no day at all."""
+        """A grid with a few holes is still published, above the coverage bar."""
         mock_service, mock_storage = _snapshot_mocks(
-            _snapshot_result(rows_stored=900, rows_lost=200, combinations_failed=12)
+            _snapshot_result(rows_stored=900, rows_lost=200, combinations_failed=3)
         )
 
         completed = await _claim_and_run_hero_stats_snapshot(
@@ -378,8 +378,22 @@ class TestClaimAndRunHeroStatsSnapshot:
 
         assert completed is True
         mock_storage.complete_hero_stats_snapshot_run.assert_awaited_once_with(
-            1700006400, 900, 12
+            1700006400, 900, 3
         )
+
+    @pytest.mark.asyncio
+    async def test_leaves_a_mostly_failed_run_unfinished(self):
+        """Below the coverage bar the day stays hidden, but the rows are kept."""
+        mock_service, mock_storage = _snapshot_mocks(
+            _snapshot_result(rows_stored=40, combinations_failed=80)
+        )
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is False
+        mock_storage.complete_hero_stats_snapshot_run.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_reports_failure_when_completing_the_slot_fails(self):
