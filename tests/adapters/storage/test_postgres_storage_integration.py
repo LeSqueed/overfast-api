@@ -491,4 +491,10 @@ async def _run_schema(storage: PostgresStorage) -> None:
 
 def _schema_sql() -> str:
     """Read the schema file synchronously (pathlib is sync; the caller is async)."""
-    return (Path(__file__).resolve().parents[3] / "app" / "adapters" / "storage" / "schema.sql").read_text()
+    return (
+        Path(__file__).resolve().parents[3]
+        / "app"
+        / "adapters"
+        / "storage"
+        / "schema.sql"
+    ).read_text()
