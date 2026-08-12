@@ -537,11 +537,12 @@ class PostgresStorage(metaclass=Singleton):
         group_parts.extend(["tier", "hero"])
         order_parts.extend(["tier", "hero"])
 
+        group_clause = f"GROUP BY {', '.join(group_parts)} " if aggregating else ""
         query = (
             f"SELECT {', '.join(select_parts)} "  # noqa: S608
             "FROM hero_stats_snapshots "
             f"WHERE {where_clause} "
-            f"GROUP BY {', '.join(group_parts)} "
+            f"{group_clause}"
             f"ORDER BY {', '.join(order_parts)} "
             f"LIMIT ${limit_placeholder} OFFSET ${len(params)}"
         )
