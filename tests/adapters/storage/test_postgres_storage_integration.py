@@ -449,6 +449,7 @@ async def test_schema_migration_deduplicates_duplicate_grid_rows(
     unique index in place, idempotently on the second run.
     """
     async with pg_storage._pool.acquire() as conn:
+        await conn.execute("DROP INDEX IF EXISTS idx_hero_stats_snapshots_unique")
         await conn.execute(
             """INSERT INTO hero_stats_snapshots
                (captured_at, platform, gamemode, region, map, tier, hero,
