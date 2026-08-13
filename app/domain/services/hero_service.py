@@ -360,6 +360,21 @@ class HeroService(StaticDataService):
                     exc,
                 )
                 continue
+            except Exception as exc:  # noqa: BLE001
+                # After the client's retries this combination still failed
+                # (e.g. a lingering timeout); skip it rather than abort the
+                # whole grid over a single combination.
+                combinations_failed += 1
+                logger.warning(
+                    "[hero-stats-snapshot] Skipping {}/{}/{}/{}/{} after retries: {}",
+                    platform,
+                    gamemode,
+                    region,
+                    map_key,
+                    tier,
+                    exc,
+                )
+                continue
             for stat in stats:
                 rows.extend(
                     [

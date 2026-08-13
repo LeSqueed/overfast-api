@@ -1,5 +1,6 @@
 """Blizzard HTTP client adapter implementing BlizzardClientPort"""
 
+import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,12 @@ from app.monitoring.metrics import (
 
 if TYPE_CHECKING:
     from app.domain.ports import ThrottlePort
+
+# Transient failures are retried with exponential backoff so one slow request
+# does not abort a long-running job (e.g. the hero stats snapshot walk).
+_BLIZZARD_MAX_ATTEMPTS = 10
+_BLIZZARD_RETRY_BASE_DELAY = 2.0
+_BLIZZARD_RETRY_MAX_DELAY = 60.0
 
 
 class BlizzardClient(metaclass=Singleton):
@@ -53,7 +60,12 @@ class BlizzardClient(metaclass=Singleton):
         headers: dict[str, str] | None = None,
         params: dict[str, str] | None = None,
     ) -> httpx2.Response:
-        """Make an HTTP GET request, respecting the adaptive throttle."""
+        """Make an HTTP GET request, respecting the adaptive throttle.
+
+        Any failure (timeout, connection error, non-2xx status) is retried up to
+        ``_BLIZZARD_MAX_ATTEMPTS`` times with exponential backoff, so a single
+        slow response doesn't kill a long-running job like the snapshot walk.
+        """
         if self.throttle:
             await self._throttle_wait()
 
@@ -64,17 +76,48 @@ class BlizzardClient(metaclass=Singleton):
             kwargs["params"] = params
 
         normalized_endpoint = normalize_blizzard_url(url)
-        response = await self._execute_request(url, normalized_endpoint, kwargs)
+        for attempt in range(1, _BLIZZARD_MAX_ATTEMPTS + 1):
+            try:
+                response = await self._execute_request(url, normalized_endpoint, kwargs)
+            except Exception as exc:
+                if attempt == _BLIZZARD_MAX_ATTEMPTS:
+                    raise
+                await asyncio.sleep(self._retry_delay(attempt))
+                logger.warning(
+                    "[BlizzardClient] Request failed (attempt {}/{}), retrying: {}",
+                    attempt,
+                    _BLIZZARD_MAX_ATTEMPTS,
+                    exc,
+                )
+                continue
 
-        if self.throttle:
-            await self.throttle.adjust_delay(response.status_code)
+            if self.throttle:
+                await self.throttle.adjust_delay(response.status_code)
 
-        logger.debug("OverFast request done!")
+            if response.status_code == status.HTTP_403_FORBIDDEN:
+                raise await self._blizzard_rate_limited_error()
 
-        if response.status_code == status.HTTP_403_FORBIDDEN:
-            raise await self._blizzard_rate_limited_error()
+            if response.is_success or attempt == _BLIZZARD_MAX_ATTEMPTS:
+                return response
 
-        return response
+            await asyncio.sleep(self._retry_delay(attempt))
+            logger.warning(
+                "[BlizzardClient] Blizzard returned HTTP {} (attempt {}/{}), retrying",
+                response.status_code,
+                attempt,
+                _BLIZZARD_MAX_ATTEMPTS,
+            )
+
+        unreachable_error = "Unreachable"
+        raise AssertionError(unreachable_error)
+
+    @staticmethod
+    def _retry_delay(attempt: int) -> float:
+        """Exponential backoff for the given attempt (1-based)."""
+        return min(
+            _BLIZZARD_RETRY_BASE_DELAY * (2 ** (attempt - 1)),
+            _BLIZZARD_RETRY_MAX_DELAY,
+        )
 
     async def _throttle_wait(self) -> None:
         """Check throttle before request; raise 503 if in penalty period."""

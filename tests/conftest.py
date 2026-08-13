@@ -77,6 +77,10 @@ async def _patch_before_every_test(
         # test that makes two sequential mocked HTTP calls would wait ~2s needlessly.
         # We keep the throttle enabled so that penalty-state (403 → 503) tests still work.
         patch("app.adapters.blizzard.throttle.settings.throttle_start_delay", 0.0),
+        # Retry-once only: the retry/backoff exists for the long-running snapshot
+        # walk; tests mock single calls and would otherwise wait out the whole
+        # backoff sequence whenever a mocked request fails.
+        patch("app.adapters.blizzard.client._BLIZZARD_MAX_ATTEMPTS", 1),
         # Prevent ValkeyTaskQueue from dispatching to the broker (not running in tests).
         # Deduplication via SET NX/EXISTS still works through the patched fake redis.
         patch.dict(TASK_MAP, {}, clear=True),
