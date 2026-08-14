@@ -309,6 +309,10 @@ class HeroService(StaticDataService):
         those rows rather than appending a second grid, so an interrupted run
         can simply be run again.
 
+        A combination that fails is not abandoned: it is collected and retried
+        once after the walk finishes. Only combinations still failing after
+        that second pass count against the run's coverage.
+
         Args:
             captured_at: Slot timestamp to store the rows under. Defaults to
                 the slot covering the current time.
@@ -320,17 +324,12 @@ class HeroService(StaticDataService):
         total_stored = 0
         total_lost = 0
         combinations_total = 0
-        combinations_failed = 0
         rows: list[dict] = []
+        failed_combinations: list[tuple] = []
         current_map_key: str | None = None
         map_keys = await self._competitive_map_keys()
-        for (
-            platform,
-            gamemode,
-            region,
-            map_key,
-            tier,
-        ) in self._hero_stats_snapshot_grid(map_keys):
+        for combination in self._hero_stats_snapshot_grid(map_keys):
+            platform, gamemode, region, map_key, tier = combination
             combinations_total += 1
             if current_map_key is not None and map_key != current_map_key:
                 stored = await self._flush_hero_stats_snapshot(slot, rows)
@@ -339,62 +338,25 @@ class HeroService(StaticDataService):
                 rows = []
             current_map_key = map_key
 
-            try:
-                stats = await self._fetch_hero_stats_for_snapshot(
-                    platform, gamemode, region, map_key, tier
-                )
-            except (
-                InvalidGamemodeFilterError,
-                ParserInternalError,
-                ParserBlizzardError,
-                ParserParsingError,
-            ) as exc:
-                combinations_failed += 1
-                logger.warning(
-                    "[hero-stats-snapshot] Skipping {}/{}/{}/{}/{}: {}",
-                    platform,
-                    gamemode,
-                    region,
-                    map_key,
-                    tier,
-                    exc,
-                )
+            combination_rows = await self._snapshot_combination_rows(
+                platform, gamemode, region, map_key, tier
+            )
+            if combination_rows is None:
+                failed_combinations.append(combination)
                 continue
-            except Exception as exc:  # noqa: BLE001
-                # After the client's retries this combination still failed
-                # (e.g. a lingering timeout); skip it rather than abort the
-                # whole grid over a single combination.
-                combinations_failed += 1
-                logger.warning(
-                    "[hero-stats-snapshot] Skipping {}/{}/{}/{}/{} after retries: {}",
-                    platform,
-                    gamemode,
-                    region,
-                    map_key,
-                    tier,
-                    exc,
-                )
-                continue
-            for stat in stats:
-                rows.extend(
-                    [
-                        {
-                            "platform": platform.value,
-                            "gamemode": gamemode.value,
-                            "region": region.value,
-                            "map": map_key,
-                            "tier": tier,
-                            "hero": stat["hero"],
-                            "pickrate": stat["pickrate"],
-                            "winrate": stat["winrate"],
-                            "banrate": stat.get("banrate"),
-                        }
-                    ]
-                )
+            rows.extend(combination_rows)
 
         stored = await self._flush_hero_stats_snapshot(slot, rows)
         total_stored += stored
         total_lost += len(rows) - stored
+
+        (
+            retry_stored,
+            retry_lost,
+            combinations_failed,
+        ) = await self._retry_failed_snapshot_combinations(slot, failed_combinations)
+        total_stored += retry_stored
+        total_lost += retry_lost
 
         return SnapshotRunResult(
             captured_at=slot,
@@ -403,6 +365,112 @@ class HeroService(StaticDataService):
             combinations_total=combinations_total,
             combinations_failed=combinations_failed,
         )
+
+    async def _snapshot_combination_rows(
+        self,
+        platform: PlayerPlatform,
+        gamemode: PlayerGamemode,
+        region: PlayerRegion,
+        map_key: str,
+        tier: str,
+    ) -> list[dict] | None:
+        """Fetch one grid combination and shape it into storable rows.
+
+        Returns:
+            The rows to store, or None when the combination could not be
+            fetched. The caller decides whether that is worth retrying.
+        """
+        try:
+            stats = await self._fetch_hero_stats_for_snapshot(
+                platform, gamemode, region, map_key, tier
+            )
+        except (
+            InvalidGamemodeFilterError,
+            ParserInternalError,
+            ParserBlizzardError,
+            ParserParsingError,
+        ) as exc:
+            logger.warning(
+                "[hero-stats-snapshot] Skipping {}/{}/{}/{}/{}: {}",
+                platform,
+                gamemode,
+                region,
+                map_key,
+                tier,
+                exc,
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001
+            # After the client's retries this combination still failed (e.g. a
+            # lingering timeout); skip it rather than abort the whole grid over
+            # a single combination.
+            logger.warning(
+                "[hero-stats-snapshot] Skipping {}/{}/{}/{}/{} after retries: {}",
+                platform,
+                gamemode,
+                region,
+                map_key,
+                tier,
+                exc,
+            )
+            return None
+
+        return [
+            {
+                "platform": platform.value,
+                "gamemode": gamemode.value,
+                "region": region.value,
+                "map": map_key,
+                "tier": tier,
+                "hero": stat["hero"],
+                "pickrate": stat["pickrate"],
+                "winrate": stat["winrate"],
+                "banrate": stat.get("banrate"),
+            }
+            for stat in stats
+        ]
+
+    async def _retry_failed_snapshot_combinations(
+        self, captured_at: int, combinations: list[tuple]
+    ) -> tuple[int, int, int]:
+        """Give every combination that failed during the walk one more attempt.
+
+        Some combinations fail deterministically — Blizzard's own gateway 504s
+        on them — and no retry recovers those. Others fail only because the
+        endpoint was briefly overloaded, and those do come back minutes later.
+        Retrying at the end of the run separates the two without stalling the
+        walk itself, and the recovered rows still land under the run's own
+        ``captured_at``.
+
+        Returns:
+            Rows stored, rows lost on flush, and how many combinations are
+            still failing after this pass.
+        """
+        if not combinations:
+            return 0, 0, 0
+
+        logger.info(
+            "[hero-stats-snapshot] Retrying {} failed combination(s) after the walk",
+            len(combinations),
+        )
+        rows: list[dict] = []
+        still_failing = 0
+        for platform, gamemode, region, map_key, tier in combinations:
+            combination_rows = await self._snapshot_combination_rows(
+                platform, gamemode, region, map_key, tier
+            )
+            if combination_rows is None:
+                still_failing += 1
+                continue
+            rows.extend(combination_rows)
+
+        stored = await self._flush_hero_stats_snapshot(captured_at, rows)
+        logger.info(
+            "[hero-stats-snapshot] Retry pass recovered {}/{} combination(s)",
+            len(combinations) - still_failing,
+            len(combinations),
+        )
+        return stored, len(rows) - stored, still_failing
 
     async def _flush_hero_stats_snapshot(
         self, captured_at: int, rows: list[dict]

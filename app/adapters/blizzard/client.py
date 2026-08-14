@@ -23,7 +23,12 @@ if TYPE_CHECKING:
 
 # Transient failures are retried with exponential backoff so one slow request
 # does not abort a long-running job (e.g. the hero stats snapshot walk).
-_BLIZZARD_MAX_ATTEMPTS = 10
+# Kept deliberately low: Blizzard fails some requests deterministically — its
+# own gateway 504s on them after 60s — and no number of immediate retries wins
+# those back, it only multiplies the wait. The snapshot walk gets its second
+# chance from a retry pass at the end of the run instead, minutes later, which
+# is where a genuinely transient failure actually recovers.
+_BLIZZARD_MAX_ATTEMPTS = 3
 _BLIZZARD_RETRY_BASE_DELAY = 2.0
 _BLIZZARD_RETRY_MAX_DELAY = 60.0
 

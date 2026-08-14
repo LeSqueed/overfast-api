@@ -401,6 +401,40 @@ class TestHeroServiceSnapshot:
         stored_maps = {row["map"] for row in all_rows}
         assert "busan" not in stored_maps
         assert stored_maps != set()
+        assert result.combinations_failed > 0
+
+    @pytest.mark.asyncio
+    async def test_snapshot_retries_failed_combos_after_the_walk(self):
+        svc = _make_hero_service()
+        svc._get_hero_stats_gamemode_filters = AsyncMock(return_value=["1"])
+        expected_stat = {"hero": "ana", "pickrate": 5.5, "winrate": 52.3}
+        failed_once: set = set()
+
+        async def _parse(*_args, **_kwargs):
+            if _kwargs.get("map_filter") == "busan":
+                tier = _kwargs.get("competitive_division")
+                if tier not in failed_once:
+                    failed_once.add(tier)
+                    msg = "transient Blizzard timeout"
+                    raise ParserParsingError(msg)
+            return [expected_stat]
+
+        with patch(
+            "app.domain.services.hero_service.parse_hero_stats_summary",
+            side_effect=_parse,
+        ):
+            result = await svc.snapshot_hero_stats()
+
+        all_rows = [
+            row
+            for call in cast(
+                "Any", svc.storage
+            ).store_hero_stats_snapshots.await_args_list
+            for row in call.args[1]
+        ]
+        assert failed_once
+        assert "busan" in {row["map"] for row in all_rows}
+        assert result.combinations_failed == 0
 
     @pytest.mark.asyncio
     async def test_snapshot_skips_parser_parsing_error(self):
