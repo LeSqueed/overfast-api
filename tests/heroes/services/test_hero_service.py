@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.domain.enums import (
+    CompetitiveDivisionHistoryFilter,
     Locale,
     MapKey,
     PlayerGamemode,
@@ -369,17 +370,8 @@ class TestHeroServiceSnapshot:
         ]
         assert all(row["hero"] == "ana" for row in all_rows)
         assert all(row["banrate"] == banrate for row in all_rows)
-        valid_tiers = {
-            "all",
-            "bronze",
-            "silver",
-            "gold",
-            "platinum",
-            "diamond",
-            "master",
-            "grandmaster",
-        }
-        assert all(row["tier"] in valid_tiers for row in all_rows)
+        expected_tiers = {tier.value for tier in CompetitiveDivisionHistoryFilter}
+        assert {row["tier"] for row in all_rows} == expected_tiers
 
     @pytest.mark.asyncio
     async def test_snapshot_skips_failed_combos(self):
