@@ -44,7 +44,12 @@ from app.api.dependencies import (
 from app.config import settings
 from app.domain.enums import HeroKey, Locale
 from app.domain.parsers.heroes import fetch_heroes_html, parse_heroes_html
-from app.domain.ports import BlizzardClientPort, StoragePort, TaskQueuePort
+from app.domain.ports import (
+    BlizzardClientPort,
+    CachePort,
+    StoragePort,
+    TaskQueuePort,
+)
 from app.domain.services import (
     GamemodeService,
     HeroService,
@@ -229,8 +234,47 @@ async def refresh_player_profile(
 _MIN_SNAPSHOT_COVERAGE = 0.95
 _SNAPSHOT_RUN_LEASE_SECONDS = 6 * 3600
 
+# Responses on these routes are derived entirely from the snapshot tables, so
+# publishing a slot makes every cached one of them wrong: they were computed
+# while the day was still hidden. Nothing else evicts them and they carry
+# ``hero_stats_history_cache_timeout`` (6h by default), so a freshly captured
+# day would stay missing from clients' date pickers for hours after it landed —
+# and longer the later a run finishes, since entries cached mid-run outlive it.
+_SNAPSHOT_DERIVED_CACHE_PATTERNS = (
+    "/heroes/stats/dates*",
+    "/heroes/stats/history*",
+)
 
-async def _reap_abandoned_snapshot_runs(storage: StoragePort) -> None:
+
+async def _invalidate_snapshot_derived_cache(cache: CachePort) -> None:
+    """Evict cached responses invalidated by publishing a snapshot slot.
+
+    Best-effort: a cache that cannot be reached must not fail a run whose rows
+    are already committed. The entries expire on their own TTL regardless.
+    """
+    evicted = 0
+    for pattern in _SNAPSHOT_DERIVED_CACHE_PATTERNS:
+        try:
+            keys = await cache.scan_keys(f"{settings.api_cache_key_prefix}:{pattern}")
+            for key in keys:
+                await cache.delete(key)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[Worker] snapshot_hero_stats: Failed to evict cached {} responses.",
+                pattern,
+            )
+            continue
+        evicted += len(keys)
+
+    if evicted:
+        logger.info(
+            "[Worker] snapshot_hero_stats: Evicted {} cached hero stats "
+            "response(s) made stale by publishing a slot.",
+            evicted,
+        )
+
+
+async def _reap_abandoned_snapshot_runs(storage: StoragePort, cache: CachePort) -> None:
     """Publish snapshot slots whose worker crashed before completing them."""
     try:
         reaped = await storage.reap_abandoned_hero_stats_snapshot_runs(
@@ -248,6 +292,7 @@ async def _reap_abandoned_snapshot_runs(storage: StoragePort) -> None:
             len(reaped),
             reaped,
         )
+        await _invalidate_snapshot_derived_cache(cache)
 
 
 async def _run_snapshot_slot(
@@ -309,6 +354,8 @@ async def _run_snapshot_slot(
         )
         return False
 
+    await _invalidate_snapshot_derived_cache(service.cache)
+
     logger.info(
         "[Worker] snapshot_hero_stats: Stored {} snapshot rows for slot {}.",
         result.rows_stored,
@@ -326,7 +373,7 @@ async def _claim_and_run_hero_stats_snapshot(
         True when the run reached the end of the grid and the slot was marked
         completed, False when the slot was already taken or the run failed.
     """
-    await _reap_abandoned_snapshot_runs(storage)
+    await _reap_abandoned_snapshot_runs(storage, service.cache)
 
     try:
         claimed = await storage.claim_hero_stats_snapshot_run(

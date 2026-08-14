@@ -233,8 +233,10 @@ def _snapshot_mocks(result: SnapshotRunResult | None = None):
     """A service returning ``result`` and a storage whose run slot is free."""
     mock_service = AsyncMock()
     mock_service.snapshot_hero_stats.return_value = result or _snapshot_result()
+    mock_service.cache.scan_keys.return_value = []
     mock_storage = AsyncMock()
     mock_storage.claim_hero_stats_snapshot_run.return_value = True
+    mock_storage.reap_abandoned_hero_stats_snapshot_runs.return_value = []
     return mock_service, mock_storage
 
 
@@ -429,6 +431,50 @@ class TestClaimAndRunHeroStatsSnapshot:
         )
 
         assert completed is False
+
+    @pytest.mark.asyncio
+    async def test_publishing_a_slot_evicts_the_stale_cached_responses(self):
+        """A published day must not stay hidden behind its own cached answers."""
+        mock_service, mock_storage = _snapshot_mocks()
+        dates_key = "api-cache:/heroes/stats/dates?platform=pc&gamemode=competitive"
+        history_key = "api-cache:/heroes/stats/history?platform=pc&gamemode=competitive"
+        mock_service.cache.scan_keys.side_effect = [[dates_key], [history_key]]
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is True
+        assert [call.args[0] for call in mock_service.cache.delete.await_args_list] == [
+            dates_key,
+            history_key,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_an_unpublished_slot_leaves_the_cache_alone(self):
+        """Below the coverage bar nothing is published, so nothing is stale."""
+        mock_service, mock_storage = _snapshot_mocks(
+            _snapshot_result(rows_stored=40, combinations_failed=80)
+        )
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is False
+        mock_service.cache.delete.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_cache_does_not_fail_a_stored_run(self):
+        mock_service, mock_storage = _snapshot_mocks()
+        mock_service.cache.scan_keys.side_effect = OSError("valkey gone")
+
+        completed = await _claim_and_run_hero_stats_snapshot(
+            mock_service, mock_storage, 1700006400
+        )
+
+        assert completed is True
+        mock_storage.complete_hero_stats_snapshot_run.assert_awaited_once()
 
 
 class TestCleanupStalePlayers:
