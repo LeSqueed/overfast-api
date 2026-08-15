@@ -42,14 +42,16 @@ success_responses: dict[int | str, dict[str, Any]] = {
             "Cache-Control": {
                 "description": (
                     "Standard caching directives (RFC 7234 + RFC 5861). "
-                    "``max-age`` reflects the staleness threshold in seconds. "
-                    "``stale-while-revalidate`` is present when a background "
-                    "refresh is in-flight, indicating how long stale data may "
-                    "still be served."
+                    "``max-age=0, must-revalidate`` forces any shared cache "
+                    "(browser, proxy) to revalidate against the server before "
+                    "every use, so it can never hold a response past the moment "
+                    "the server's cache is invalidated (e.g. when a daily "
+                    "snapshot publishes). The server's SWR envelope (Valkey, "
+                    "served by nginx) still absorbs repeated requests."
                 ),
                 "schema": {
                     "type": "string",
-                    "example": "public, max-age=86400, stale-while-revalidate=60",
+                    "example": "public, max-age=0, must-revalidate",
                 },
             },
             "X-Cache-Status": {
@@ -145,29 +147,27 @@ def apply_swr_headers(
     cache_ttl: int,
     is_stale: bool,
     age_seconds: int = 0,
-    *,
-    staleness_threshold: int | None = None,
 ) -> None:
     """Add standard SWR and cache metadata headers to the response.
 
     Sets ``Cache-Control`` (RFC 5861), ``Age`` (RFC 7234), ``X-Cache-Status``,
     and the non-standard ``X-Cache-TTL`` on every FastAPI-served response.
 
-    ``staleness_threshold`` is used for ``Cache-Control: max-age``; it defaults
-    to ``cache_ttl`` for endpoints that have no SWR (e.g. player, search).
-    ``stale-while-revalidate`` is included only on stale responses, using the
-    configured ``stale_cache_timeout`` as the revalidation window.
+    ``Cache-Control`` is ``public, max-age=0, must-revalidate``: a shared cache
+    must revalidate against the server before every use, so it can never hold a
+    response past the moment the server invalidates it (e.g. when a daily
+    snapshot publishes). The server-side SWR envelope (Valkey, served by nginx)
+    still absorbs repeated requests — the browser always asks the server, and the
+    server answers from cache.
+
+    ``cache_ttl`` remains the server-side TTL written into the Valkey envelope; it
+    no longer leaks into the response header.
     """
-    max_age = staleness_threshold if staleness_threshold is not None else cache_ttl
     response.headers[settings.cache_ttl_header] = str(cache_ttl)
+    response.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
     if age_seconds > 0:
         response.headers["Age"] = str(age_seconds)
     if is_stale:
-        response.headers["Cache-Control"] = (
-            f"public, max-age={max_age},"
-            f" stale-while-revalidate={settings.stale_cache_timeout}"
-        )
         response.headers["X-Cache-Status"] = "stale"
     else:
-        response.headers["Cache-Control"] = f"public, max-age={max_age}"
         response.headers["X-Cache-Status"] = "hit"

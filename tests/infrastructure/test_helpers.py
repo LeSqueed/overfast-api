@@ -261,14 +261,32 @@ class TestApplySWRHeaders:
         apply_swr_headers(resp, cache_ttl=3600, is_stale=False)
 
         assert resp.headers["X-Cache-Status"] == "hit"
-        assert "stale-while-revalidate" not in resp.headers.get("Cache-Control", "")
 
     def test_stale_response_sets_stale_status(self):
         resp = self._make_response()
         apply_swr_headers(resp, cache_ttl=3600, is_stale=True)
 
         assert resp.headers["X-Cache-Status"] == "stale"
-        assert "stale-while-revalidate" in resp.headers["Cache-Control"]
+
+    def test_cache_control_forces_revalidation_with_no_max_age(self):
+        """Cache-Control must force revalidation (never hold for a fixed time).
+
+        A shared cache must always revalidate against the server — otherwise a
+        browser could hold a response past the moment the server invalidates it
+        (e.g. when a daily snapshot publishes) and hide new data.
+        """
+        resp = self._make_response()
+        apply_swr_headers(resp, cache_ttl=3600, is_stale=False)
+
+        assert resp.headers["Cache-Control"] == "public, max-age=0, must-revalidate"
+
+    def test_cache_control_does_not_leak_server_ttl(self):
+        """The server-side TTL must stay server-side, not appear as max-age."""
+        resp = self._make_response()
+        apply_swr_headers(resp, cache_ttl=3600, is_stale=False)
+
+        assert "max-age=3600" not in resp.headers["Cache-Control"]
+        assert "stale-while-revalidate" not in resp.headers["Cache-Control"]
 
     def test_age_header_set_when_positive(self):
         resp = self._make_response()
@@ -287,14 +305,3 @@ class TestApplySWRHeaders:
         apply_swr_headers(resp, cache_ttl=600, is_stale=False)
 
         assert resp.headers[settings.cache_ttl_header] == "600"
-
-    def test_staleness_threshold_overrides_max_age(self):
-        resp = self._make_response()
-        apply_swr_headers(
-            resp,
-            cache_ttl=3600,
-            is_stale=False,
-            staleness_threshold=1800,
-        )
-
-        assert "max-age=1800" in resp.headers["Cache-Control"]

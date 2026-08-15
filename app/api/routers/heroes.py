@@ -148,13 +148,7 @@ async def list_heroes(
     data, is_stale, age = await service.list_heroes(
         locale=locale, role=role, gamemode=gamemode, cache_key=build_cache_key(request)
     )
-    apply_swr_headers(
-        response,
-        settings.heroes_path_cache_timeout,
-        is_stale,
-        age,
-        staleness_threshold=settings.heroes_staleness_threshold,
-    )
+    apply_swr_headers(response, settings.heroes_path_cache_timeout, is_stale, age)
     return data
 
 
@@ -506,11 +500,5 @@ async def get_hero(
     data, is_stale, age = await service.get_hero(
         hero_key=str(hero_key), locale=locale, cache_key=build_cache_key(request)
     )
-    apply_swr_headers(
-        response,
-        settings.hero_path_cache_timeout,
-        is_stale,
-        age,
-        staleness_threshold=settings.heroes_staleness_threshold,
-    )
+    apply_swr_headers(response, settings.hero_path_cache_timeout, is_stale, age)
     return data

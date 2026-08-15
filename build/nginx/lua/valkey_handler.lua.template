@@ -99,14 +99,16 @@ local function handle_valkey_request()
     local age = math.max(0, ngx.time() - stored_at)
     ngx.header["Age"] = age
 
-    -- Cache-Control with SWR directives (RFC 5861)
-    local max_age = tonumber(envelope.staleness_threshold) or cache_ttl
+    -- Cache-Control (RFC 5861): max-age=0 + must-revalidate forces a shared
+    -- cache (browser, proxy) to revalidate against the server before every use,
+    -- so it can never hold a response past the moment the server invalidates it
+    -- (e.g. when a daily snapshot publishes). The server-side SWR envelope still
+    -- absorbs repeated requests; X-Cache-Status reflects the envelope freshness.
     local swr = tonumber(envelope.stale_while_revalidate) or 0
+    ngx.header["Cache-Control"] = "public, max-age=0, must-revalidate"
     if swr > 0 then
-        ngx.header["Cache-Control"] = "public, max-age=" .. max_age .. ", stale-while-revalidate=" .. swr
         ngx.header["X-Cache-Status"] = "stale"
     else
-        ngx.header["Cache-Control"] = "public, max-age=" .. max_age
         ngx.header["X-Cache-Status"] = "hit"
     end
 
